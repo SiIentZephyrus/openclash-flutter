@@ -35,14 +35,18 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      signing: ${{ steps.signing.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Test release publishing
+        run: python3 -m unittest discover -s test -p ci_release_test.py -v
 
       - name: Read and validate version
         id: version
         shell: bash
         env:
-          PUBLISH: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+          PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         run: |
           set -euo pipefail
           version=$(sed -nE 's/^version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?)\+[0-9]+[[:space:]]*$/\1/p' pubspec.yaml)
@@ -80,6 +84,7 @@ jobs:
         run: flutter test --no-pub
 
       - name: Configure Android signing
+        id: signing
         if: github.event_name != 'pull_request'
         shell: bash
         env:
@@ -87,20 +92,17 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          PUBLISH: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         run: |
           set -euo pipefail
           if [[ -z "$KEYSTORE_BASE64" ]]; then
-            if [[ "$PUBLISH" == true ]]; then
-              echo '::error::Configure the four ANDROID signing secrets before publishing. See README.'
-              exit 1
-            fi
-            echo '::warning::No signing secrets: building a debug-signed CI preview only.'
+            echo '::warning::Using the runner debug certificate. Configure Android signing secrets for APKs that support upgrades across builds.'
+            echo 'mode=debug' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           : "${KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD}"
           : "${KEY_ALIAS:?Missing ANDROID_KEY_ALIAS}"
           : "${KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD}"
+          echo 'mode=custom' >> "$GITHUB_OUTPUT"
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-release.keystore"
           chmod 600 "$RUNNER_TEMP/android-release.keystore"
           python3 - <<'PY'
@@ -145,7 +147,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -154,6 +156,8 @@ jobs:
       group: release-${{ needs.build.outputs.tag }}
       cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: OpenClash-${{ needs.build.outputs.version }}-apks
@@ -167,32 +171,5 @@ jobs:
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
           RELEASE_PRERELEASE: ${{ inputs.prerelease || contains(needs.build.outputs.version, '-') }}
-        run: |
-          set -euo pipefail
-          cd dist
-          sha256sum --check "SHA256SUMS-$RELEASE_VERSION.txt"
-          # Never replace a published version with APKs from a different commit.
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "::error::Release $RELEASE_TAG already exists. Bump pubspec.yaml and publish a new version."
-            exit 1
-          fi
-          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            tag_commit=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)
-            [[ "$tag_commit" == "$GITHUB_SHA" ]] || { echo '::error::Existing tag points to a different commit.'; exit 1; }
-          fi
-          cat > release-notes.md <<EOF
-          Android APKs built from commit $GITHUB_SHA.
-
-          - arm64-v8a: 64-bit ARM phones (recommended for most devices)
-          - armeabi-v7a: 32-bit ARM devices
-          - x86_64: 64-bit x86 devices / emulators
-
-          Install one APK matching your device. SHA-256 checksums are included.
-          EOF
-          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" \
-            --title "OpenClash $RELEASE_VERSION" --notes-file release-notes.md --draft
-          gh release upload "$RELEASE_TAG" "OpenClash-$RELEASE_VERSION-"*.apk "SHA256SUMS-$RELEASE_VERSION.txt"
-          args=(--draft=false)
-          if [[ "$RELEASE_PRERELEASE" == true ]]; then args+=(--prerelease); fi
-          gh release edit "$RELEASE_TAG" "${args[@]}"
-          echo "### Published [$RELEASE_TAG](https://github.com/$GH_REPO/releases/tag/$RELEASE_TAG)" >> "$GITHUB_STEP_SUMMARY"
+          RELEASE_SIGNING: ${{ needs.build.outputs.signing }}
+        run: bash scripts/publish-android.sh

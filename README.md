@@ -59,11 +59,12 @@ Flutter 原始分包输出位于 `build/app/outputs/flutter-apk/app-<ABI>-releas
 
 [Android APK 工作流](https://github.com/SiIentZephyrus/openclash-flutter/actions/workflows/android.yml) 使用固定 Flutter 3.38.4 和 JDK 17，先运行静态分析及测试，再构建 ARM64、ARMv7、x86_64 三个 APK，附带 SHA-256 校验文件。
 
-- 推送 `main` 或向 `main` 提交 PR：自动检查、构建，安装包在 Actions 的 Artifacts 中保存 14 天，不创建 Release。
+- 推送 `main`：自动检查、构建，并将三个 APK 和 SHA-256 校验文件发布到 `v版本号` 对应的 [GitHub Release](https://github.com/SiIentZephyrus/openclash-flutter/releases)。安装包也在 Actions 的 Artifacts 中保存 14 天。
+- 向 `main` 提交 PR：只检查、构建和保存 Artifacts，不发布 Release。
 - 手动发布：进入 Actions → Android APK → Run workflow，选择 `main`，保留 `publish=true`。需要预发布版本时勾选 `prerelease`。
 - 标签发布：将 `pubspec.yaml` 更新为新的 `版本号+构建号` 后，推送对应的 `v版本号` 标签，例如 `version: 1.0.6+7` 对应 `v1.0.6`，自动构建并发布。
 
-发布版本与文件名取自 `pubspec.yaml`，标签必须匹配。已发布的版本不会被覆盖；再次发布需递增版本号和构建号。发布先创建草稿，全部安装包上传成功后才对外显示；若上传中途失败留下草稿，删除失败草稿后重新运行。普通构建无需个人访问令牌，发布使用工作流自带的 `GITHUB_TOKEN` 和仅发布任务拥有的 `contents: write` 权限。
+发布版本与文件名取自 `pubspec.yaml`，标签必须匹配。已发布的版本不会被覆盖；同版本再次构建会保留原 Release，更新 App 时需递增版本号和构建号。发布先创建草稿，全部安装包上传成功后才对外显示，再检查四个下载附件是否存在；同一提交上传失败留下的草稿可以重新运行继续上传。构建、发布均无需个人访问令牌，使用工作流自带的 `GITHUB_TOKEN` 和仅发布任务拥有的 `contents: write` 权限。
 
 也可安装 [GitHub CLI](https://cli.github.com/) 并运行一次 `gh auth login`，之后用本地工具触发：
 
@@ -98,7 +99,9 @@ Flutter 原始分包输出位于 `build/app/outputs/flutter-apk/app-<ABI>-releas
 .\scripts\configure-ci-signing.ps1 -UseCurrentDebugKey
 ```
 
-请复用并备份同一份签名文件。CI 密钥仅在构建期间写入 runner 临时目录，任务结束后删除，不会上传到 Artifacts 或 Release。没有签名 Secrets 时，普通 CI 生成仅供测试的 debug 签名包；发布任务会明确报错，避免每次用不同证书发布而无法覆盖安装。来自 PR 的构建不读取签名 Secrets。
+请复用并备份同一份签名文件。CI 密钥仅在构建期间写入 runner 临时目录，任务结束后删除，不会上传到 Artifacts 或 Release。没有签名 Secrets 时，仍会发布可下载的 CI debug 签名包，并在 Release 说明中标记临时签名；不同构建的证书可能不同，覆盖安装会失败，卸载重装会清除本地设置。需要持续覆盖升级时，应先配置固定签名 Secrets。来自 PR 的构建不读取签名 Secrets。
+
+发布脚本的 7 项回归测试覆盖附件与校验、上传失败保留草稿、草稿重试、已发布版本不覆盖、标签与提交匹配以及签名说明，可用 `python -m unittest discover -s test -p ci_release_test.py -v` 运行（需要 Bash；Windows 可通过 `BASH_FOR_TESTS` 指定 Git Bash）。
 
 工程保留 Flutter 生成的 iOS、Windows、Web 平台目录，但此次交付目标是 Android。其他平台未做发布验证；Web 还受控制器 CORS 与浏览器混合内容限制。
 
