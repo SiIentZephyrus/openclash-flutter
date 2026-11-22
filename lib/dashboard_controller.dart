@@ -6,6 +6,7 @@ import 'clash_api.dart';
 import 'models.dart';
 import 'controller_store.dart';
 import 'group_traffic.dart';
+import 'connection_history.dart';
 
 class DashboardController extends ChangeNotifier {
   DashboardController({
@@ -27,7 +28,27 @@ class DashboardController extends ChangeNotifier {
   final Set<String> _rootProxyNames = {};
   String? providerError;
   List<LogEntry> logs = [];
-  List<Map<String, dynamic>> connections = [], rules = [];
+  List<Map<String, dynamic>> rules = [];
+  List<Map<String, dynamic>> _connections = [];
+  final _connectionHistory = ConnectionHistory();
+  Timer? _connectionHistoryExpiry;
+  List<Map<String, dynamic>> get connections => _connections;
+  List<Map<String, dynamic>> get recentConnections =>
+      _connectionHistory.connections;
+  set connections(List<Map<String, dynamic>> value) {
+    _connections = value;
+    _connectionHistory.update(value, now: _trafficClock.elapsed);
+  }
+
+  void _startConnectionHistoryExpiry() {
+    if (_disposed) return;
+    _connectionHistoryExpiry ??= Timer.periodic(const Duration(seconds: 1), (
+      _,
+    ) {
+      if (_connectionHistory.prune(_trafficClock.elapsed)) _emit();
+    });
+  }
+
   final _groupTraffic = GroupTrafficTracker();
   final _trafficClock = Stopwatch()..start();
   Timer? _connectionTrafficExpiry;
@@ -126,6 +147,8 @@ class DashboardController extends ChangeNotifier {
 
   void _stop() {
     _generation++;
+    _connectionHistoryExpiry?.cancel();
+    _connectionHistoryExpiry = null;
     _connectionTrafficExpiry?.cancel();
     _groupTraffic.reset();
     _reconnectTimer?.cancel();
@@ -156,7 +179,8 @@ class DashboardController extends ChangeNotifier {
     up = down = uploadTotal = downloadTotal = memory = 0;
     downloadHistory = List.filled(40, 0);
     uploadHistory = List.filled(40, 0);
-    connections = [];
+    _connections = [];
+    _connectionHistory.clear();
     rules = [];
     logs = [];
     proxies = {};
@@ -385,6 +409,7 @@ class DashboardController extends ChangeNotifier {
                 timestamp: _trafficClock.elapsed,
               );
               connections = nextConnections;
+              _startConnectionHistoryExpiry();
               uploadTotal = data['uploadTotal'] as num? ?? 0;
               downloadTotal = data['downloadTotal'] as num? ?? 0;
               _connectionTrafficExpiry?.cancel();
@@ -713,7 +738,7 @@ class DashboardController extends ChangeNotifier {
     final generation = _generation;
     await _api!.request('DELETE', '/connections/${Uri.encodeComponent(id)}');
     if (generation == _generation) {
-      connections.removeWhere((c) => c['id'] == id);
+      connections = connections.where((c) => c['id'] != id).toList();
       _emit();
     }
   }

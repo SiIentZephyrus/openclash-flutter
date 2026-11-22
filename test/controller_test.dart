@@ -72,10 +72,15 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 30));
         snapshot(1001000);
         await until(() => c.trafficFor('outer') != null);
+        socket.add(jsonEncode({'connections': []}));
+        await until(() => c.connections.isEmpty);
+        expect(c.recentConnections.single['id'], 'live');
+        expect(c.recentConnections.single['upload'], 1001000);
         await socket.close();
         await until(() => c.trafficFor('outer') == null);
         c.disconnect();
         expect(c.trafficFor('inner'), isNull);
+        expect(c.recentConnections, isEmpty);
       } finally {
         c.dispose();
         for (final socket in sockets) {

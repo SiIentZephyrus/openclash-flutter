@@ -154,7 +154,7 @@ class FixtureController extends DashboardController {
   Future<void> loadRules() async {}
   @override
   Future<void> closeConnection(String id) async {
-    connections.removeWhere((c) => c['id'] == id);
+    connections = connections.where((c) => c['id'] != id).toList();
     notifyListeners();
   }
 

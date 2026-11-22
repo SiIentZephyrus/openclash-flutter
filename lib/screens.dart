@@ -550,10 +550,26 @@ class LogsPage extends StatefulWidget {
 class _LogsPageState extends State<LogsPage> {
   String query = '', level = 'all';
   bool paused = false, follow = true;
+  bool pausedForSearch = false;
   List<LogEntry> frozen = [];
+  final search = TextEditingController();
   final scroll = ScrollController();
+
+  void updateQuery(String value) => setState(() {
+    final wasSearching = query.trim().isNotEmpty;
+    query = value;
+    if (!wasSearching && query.trim().isNotEmpty && !paused) {
+      frozen = List.of(widget.controller.logs);
+      paused = pausedForSearch = true;
+    } else if (query.trim().isEmpty && pausedForSearch) {
+      paused = pausedForSearch = false;
+      frozen = [];
+    }
+  });
+
   @override
   void dispose() {
+    search.dispose();
     scroll.dispose();
     super.dispose();
   }
@@ -562,15 +578,19 @@ class _LogsPageState extends State<LogsPage> {
       .where(
         (l) =>
             (level == 'all' || l.level == level) &&
-            l.message.toLowerCase().contains(query.toLowerCase()),
+            l.message.toLowerCase().contains(query.trim().toLowerCase()),
       )
       .toList();
   @override
   Widget build(BuildContext context) {
     final entries = filtered;
-    if (follow && !paused) {
+    if (follow && !paused && query.trim().isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && scroll.hasClients) {
+        if (mounted &&
+            follow &&
+            !paused &&
+            query.trim().isEmpty &&
+            scroll.hasClients) {
           scroll.jumpTo(scroll.position.maxScrollExtent);
         }
       });
@@ -594,7 +614,7 @@ class _LogsPageState extends State<LogsPage> {
               ),
               Tag(
                 paused
-                    ? '已暂停'
+                    ? (pausedForSearch ? '搜索已暂停刷新' : '已暂停')
                     : widget.controller.liveStreams.contains('/logs')
                     ? '实时推送'
                     : '等待连接',
@@ -610,10 +630,26 @@ class _LogsPageState extends State<LogsPage> {
           ),
           const SizedBox(height: 18),
           TextField(
-            onChanged: (v) => setState(() => query = v),
-            decoration: const InputDecoration(
+            key: const ValueKey('log-search'),
+            controller: search,
+            onChanged: updateQuery,
+            decoration: InputDecoration(
               hintText: '搜索域名、IP 或日志内容',
-              prefixIcon: Icon(Icons.search_rounded, size: 20, color: muted),
+              prefixIcon: const Icon(
+                Icons.search_rounded,
+                size: 20,
+                color: muted,
+              ),
+              suffixIcon: query.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: '清空搜索',
+                      onPressed: () {
+                        search.clear();
+                        updateQuery('');
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                    ),
             ),
           ),
           const SizedBox(height: 12),
@@ -655,11 +691,25 @@ class _LogsPageState extends State<LogsPage> {
                 style: const TextStyle(fontSize: 10, color: muted),
               ),
               const Spacer(),
+              if (paused)
+                IconButton(
+                  tooltip: '刷新日志快照',
+                  onPressed: () => setState(() {
+                    frozen = List.of(widget.controller.logs);
+                  }),
+                  icon: const Icon(
+                    Icons.refresh_rounded,
+                    size: 19,
+                    color: accent,
+                  ),
+                ),
               IconButton(
                 tooltip: paused ? '继续日志' : '暂停日志',
                 onPressed: () => setState(() {
                   paused = !paused;
+                  pausedForSearch = false;
                   if (paused) frozen = List.of(widget.controller.logs);
+                  if (!paused) frozen = [];
                 }),
                 icon: Icon(
                   paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
@@ -803,17 +853,48 @@ class ConnectionsPage extends StatefulWidget {
 class _ConnectionsPageState extends State<ConnectionsPage> {
   String query = '';
   bool showRules = false;
+  bool paused = false;
+  List<Map<String, dynamic>> frozen = [];
+  final search = TextEditingController();
+
+  List<Map<String, dynamic>> get source => query.trim().isEmpty
+      ? widget.controller.connections
+      : widget.controller.recentConnections;
+
+  List<Map<String, dynamic>> snapshot() =>
+      source.map((item) => Map<String, dynamic>.of(item)).toList();
+
+  void updateQuery(String value) => setState(() {
+    query = value;
+  });
+
+  void selectTab(bool rules) => setState(() {
+    if (showRules == rules) return;
+    showRules = rules;
+  });
+
+  @override
+  void dispose() {
+    search.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
-    final connections = c.connections
+    final liveConnectionIds = c.connections.map((item) => item['id']).toSet();
+    final connections = (paused ? frozen : source)
         .where(
-          (item) => item.toString().toLowerCase().contains(query.toLowerCase()),
+          (item) => item.toString().toLowerCase().contains(
+            query.trim().toLowerCase(),
+          ),
         )
         .toList();
     final rules = c.rules
         .where(
-          (item) => item.toString().toLowerCase().contains(query.toLowerCase()),
+          (item) => item.toString().toLowerCase().contains(
+            query.trim().toLowerCase(),
+          ),
         )
         .toList();
     return Column(
@@ -841,11 +922,15 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                 children: [
                   ChoiceChip(
                     label: Text(
-                      '活跃连接 ${c.connections.length}',
+                      paused
+                          ? '连接快照 ${frozen.length}'
+                          : query.trim().isNotEmpty && !showRules
+                          ? '近期连接 ${source.length}'
+                          : '活跃连接 ${c.connections.length}',
                       style: const TextStyle(fontSize: 11),
                     ),
                     selected: !showRules,
-                    onSelected: (_) => setState(() => showRules = false),
+                    onSelected: (_) => selectTab(false),
                     showCheckmark: false,
                   ),
                   const SizedBox(width: 8),
@@ -856,7 +941,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                     ),
                     selected: showRules,
                     onSelected: (_) {
-                      setState(() => showRules = true);
+                      selectTab(true);
                       unawaited(c.loadRules());
                     },
                     showCheckmark: false,
@@ -865,7 +950,9 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
               ),
               const SizedBox(height: 14),
               TextField(
-                onChanged: (value) => setState(() => query = value),
+                key: const ValueKey('connection-search'),
+                controller: search,
+                onChanged: updateQuery,
                 decoration: InputDecoration(
                   hintText: showRules ? '搜索规则、目标策略' : '搜索域名、IP、代理链',
                   prefixIcon: const Icon(
@@ -873,8 +960,55 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                     size: 20,
                     color: muted,
                   ),
+                  suffixIcon: query.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清空搜索',
+                          onPressed: () {
+                            search.clear();
+                            updateQuery('');
+                          },
+                          icon: const Icon(Icons.close_rounded, size: 18),
+                        ),
                 ),
               ),
+              if (!showRules)
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        paused
+                            ? '已暂停刷新'
+                            : query.trim().isNotEmpty
+                            ? '实时搜索 · 已结束保留 5 分钟'
+                            : '实时刷新 · 搜索含最近 5 分钟连接',
+                        style: const TextStyle(fontSize: 10, color: muted),
+                      ),
+                    ),
+                    if (paused)
+                      IconButton(
+                        tooltip: '刷新连接快照',
+                        onPressed: () => setState(() => frozen = snapshot()),
+                        icon: const Icon(
+                          Icons.refresh_rounded,
+                          size: 19,
+                          color: accent,
+                        ),
+                      ),
+                    IconButton(
+                      tooltip: paused ? '继续刷新连接' : '暂停刷新连接',
+                      onPressed: () => setState(() {
+                        paused = !paused;
+                        frozen = paused ? snapshot() : [];
+                      }),
+                      icon: Icon(
+                        paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                        size: 19,
+                        color: accent,
+                      ),
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -887,7 +1021,13 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
               if (i == (showRules ? rules.length : connections.length)) {
                 return (showRules ? rules.isEmpty : connections.isEmpty)
                     ? EmptyState(
-                        showRules ? '暂无规则' : '暂无活跃连接',
+                        showRules
+                            ? '暂无规则'
+                            : paused
+                            ? '暂无连接快照'
+                            : query.trim().isNotEmpty
+                            ? '暂无匹配连接'
+                            : '暂无活跃连接',
                         query.isEmpty ? '连接控制器后自动更新' : '没有匹配的搜索结果',
                         icon: Icons.swap_calls_rounded,
                       )
@@ -926,6 +1066,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
               final meta = item['metadata'] as Map<String, dynamic>? ?? {};
               final host = meta['host']?.toString();
               return Panel(
+                key: ValueKey('connection-${item['id']}'),
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -950,13 +1091,23 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                             ),
                           ),
                         ),
+                        if (!liveConnectionIds.contains(item['id']))
+                          const Tag('已结束', color: muted),
                         IconButton(
                           tooltip: '关闭连接',
                           visualDensity: VisualDensity.compact,
-                          onPressed: () => runAction(
-                            context,
-                            () => c.closeConnection('${item['id']}'),
-                          ),
+                          onPressed: !liveConnectionIds.contains(item['id'])
+                              ? null
+                              : () => runAction(context, () async {
+                                  await c.closeConnection('${item['id']}');
+                                  if (mounted) {
+                                    setState(
+                                      () => frozen.removeWhere(
+                                        (entry) => entry['id'] == item['id'],
+                                      ),
+                                    );
+                                  }
+                                }),
                           icon: const Icon(
                             Icons.close_rounded,
                             size: 17,
