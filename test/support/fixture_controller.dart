@@ -2,9 +2,23 @@ import 'dart:async';
 import 'dart:math';
 import 'package:openclash_client/dashboard_controller.dart';
 import 'package:openclash_client/models.dart';
+import 'package:openclash_client/group_traffic.dart';
 
 // UI fixtures are test-only. Production has no sample data or demo mode.
 class FixtureController extends DashboardController {
+  final trafficRates = <String, TrafficRate>{
+    '节点选择': const TrafficRate(upload: 128 * 1024, download: 2.4 * 1048576),
+    '流媒体': const TrafficRate(upload: 24 * 1024, download: 1.2 * 1048576),
+  };
+  @override
+  TrafficRate? trafficFor(String groupName) =>
+      trafficRates[groupName] ?? const TrafficRate();
+
+  void updateTraffic(String groupName, TrafficRate rate) {
+    trafficRates[groupName] = rate;
+    notifyListeners();
+  }
+
   FixtureController() {
     initialized = true;
     hasProfile = true;

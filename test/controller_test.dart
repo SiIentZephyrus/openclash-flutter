@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +6,87 @@ import 'package:openclash_client/dashboard_controller.dart';
 import 'package:openclash_client/models.dart';
 
 void main() {
+  test(
+    'connection stream updates group speed and clears stale or closed streams',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final ready = Completer<WebSocket>();
+      final sockets = <WebSocket>[];
+      final c = DashboardController();
+      final listener = server.listen((request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          final socket = await WebSocketTransformer.upgrade(request);
+          sockets.add(socket);
+          if (request.uri.path == '/connections') ready.complete(socket);
+          return;
+        }
+        final data = switch (request.uri.path) {
+          '/version' => {'version': 'test'},
+          '/configs' => {'mode': 'rule'},
+          '/proxies' => {'proxies': <String, dynamic>{}},
+          '/providers/proxies' => {'providers': <String, dynamic>{}},
+          _ => {'rules': []},
+        };
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(data));
+        await request.response.close();
+      });
+      Future<void> until(bool Function() condition) async {
+        for (var i = 0; i < 200 && !condition(); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(condition(), isTrue);
+      }
+
+      try {
+        await c.connect('http://127.0.0.1:${server.port}', '');
+        final socket = await ready.future.timeout(const Duration(seconds: 3));
+        void snapshot(int bytes) => socket.add(
+          jsonEncode({
+            'connections': [
+              {
+                'id': 'live',
+                'upload': bytes,
+                'download': bytes * 2,
+                'chains': ['HK', 'inner', 'outer'],
+              },
+            ],
+          }),
+        );
+        snapshot(10000);
+        await until(() => c.connections.isNotEmpty);
+        expect(c.trafficFor('outer'), isNull);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        snapshot(11000);
+        await until(() => c.trafficFor('outer') != null);
+        expect(c.trafficFor('outer')!.download, greaterThan(0));
+        expect(
+          c.trafficFor('outer')!.download,
+          c.trafficFor('inner')!.download,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 4100));
+        expect(c.trafficFor('outer'), isNull);
+        snapshot(1000000);
+        await until(() => c.connections.single['upload'] == 1000000);
+        expect(c.trafficFor('outer'), isNull);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        snapshot(1001000);
+        await until(() => c.trafficFor('outer') != null);
+        await socket.close();
+        await until(() => c.trafficFor('outer') == null);
+        c.disconnect();
+        expect(c.trafficFor('inner'), isNull);
+      } finally {
+        c.dispose();
+        for (final socket in sockets) {
+          await socket.close();
+        }
+        await listener.cancel();
+        await server.close(force: true);
+      }
+    },
+  );
+
   test(
     'strategy groups follow GLOBAL config order instead of response order',
     () {

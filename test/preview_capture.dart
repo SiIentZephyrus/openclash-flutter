@@ -68,6 +68,11 @@ void main() {
       await tester.pumpAndSettle();
       await capture(page.value);
       if (page.key == '代理') {
+        await tester.tap(find.byKey(const ValueKey('collapse-all-groups')));
+        await tester.pumpAndSettle();
+        await capture('proxies-traffic');
+        await tester.tap(find.byTooltip('展开所有策略组'));
+        await tester.pumpAndSettle();
         for (final option in {
           '列表': 'list',
           '紧凑': 'compact',

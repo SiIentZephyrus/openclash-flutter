@@ -6,6 +6,7 @@ import 'main.dart';
 import 'models.dart';
 import 'ui_components.dart';
 import 'app_notice.dart';
+import 'group_traffic.dart';
 
 const _layouts = {'card': '卡片', 'list': '列表', 'compact': '紧凑'};
 
@@ -573,59 +574,80 @@ class _ProxiesPageState extends State<ProxiesPage> {
               }),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
-                      group.type == 'Selector'
-                          ? Icons.layers_outlined
-                          : Icons.auto_awesome_rounded,
-                      color: accent,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            group.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
+                    Row(
+                      children: [
+                        Icon(
+                          group.type == 'Selector'
+                              ? Icons.layers_outlined
+                              : Icons.auto_awesome_rounded,
+                          color: accent,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                group.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                              Text(
+                                '${group.members.length} 个 · ${group.now.isEmpty ? group.type : group.now}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 9,
+                                  color: muted,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 5),
-                          Text(
-                            '${group.members.length} 个 · ${group.now.isEmpty ? group.type : group.now}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 9, color: muted),
+                        ),
+                        const SizedBox(width: 5),
+                        _DelayBadge(
+                          controller: c,
+                          name: group.name,
+                          group: true,
+                        ),
+                        IconButton(
+                          tooltip: '测试 ${group.name} 延迟',
+                          onPressed: c.testing
+                              ? null
+                              : () => _test(() => c.testDelay(group)),
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.speed_rounded,
+                            color: accent,
+                            size: 19,
                           ),
-                        ],
-                      ),
+                        ),
+                        Icon(
+                          isCollapsed
+                              ? Icons.keyboard_arrow_down_rounded
+                              : Icons.keyboard_arrow_up_rounded,
+                          color: muted,
+                          size: 18,
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 5),
-                    _DelayBadge(controller: c, name: group.name, group: true),
-                    IconButton(
-                      tooltip: '测试 ${group.name} 延迟',
-                      onPressed: c.testing
-                          ? null
-                          : () => _test(() => c.testDelay(group)),
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(
-                        Icons.speed_rounded,
-                        color: accent,
-                        size: 19,
+                    const SizedBox(height: 9),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 29),
+                      child: _GroupTrafficStats(
+                        key: ValueKey('group-traffic-${group.name}'),
+                        name: group.name,
+                        rate: c.trafficFor(group.name),
                       ),
-                    ),
-                    Icon(
-                      isCollapsed
-                          ? Icons.keyboard_arrow_down_rounded
-                          : Icons.keyboard_arrow_up_rounded,
-                      color: muted,
-                      size: 18,
                     ),
                   ],
                 ),
@@ -689,6 +711,61 @@ class _ProxiesPageState extends State<ProxiesPage> {
       ),
     );
   }
+}
+
+class _GroupTrafficStats extends StatelessWidget {
+  const _GroupTrafficStats({super.key, required this.name, required this.rate});
+  final String name;
+  final TrafficRate? rate;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: '按经过本策略组的活跃连接汇总上传、下载速率',
+    child: Wrap(
+      spacing: 12,
+      runSpacing: 6,
+      children: [
+        for (final upload in [true, false])
+          Semantics(
+            label: '$name ${upload ? '上传' : '下载'}速率',
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: (upload ? accent : const Color(0xFF6089AE)).withValues(
+                  alpha: .06,
+                ),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      upload ? Icons.north_rounded : Icons.south_rounded,
+                      size: 12,
+                      color: upload ? accent : const Color(0xFF6089AE),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      rate == null
+                          ? '—'
+                          : formatBytes(
+                              upload ? rate!.upload : rate!.download,
+                              rate: true,
+                            ),
+                      key: ValueKey(
+                        'group-${upload ? 'upload' : 'download'}-$name',
+                      ),
+                      style: const TextStyle(fontSize: 10, color: ink),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 class _DelayBadge extends StatelessWidget {

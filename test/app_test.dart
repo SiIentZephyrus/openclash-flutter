@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:openclash_client/dashboard_controller.dart';
 import 'support/fixture_controller.dart';
 import 'package:openclash_client/main.dart';
+import 'package:openclash_client/group_traffic.dart';
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -224,6 +225,44 @@ void main() {
       c.dispose();
     },
   );
+  testWidgets('live group traffic updates while collapsed in every layout', (
+    tester,
+  ) async {
+    final c = (await mount(tester, const Size(320, 740))) as FixtureController;
+    await tester.tap(find.text('代理').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('collapse-all-groups')));
+    await tester.pumpAndSettle();
+    final upload = find.byKey(const ValueKey('group-upload-节点选择'));
+    final download = find.byKey(const ValueKey('group-download-节点选择'));
+    expect(tester.widget<Text>(upload).data, '128.0 KB/s');
+    expect(tester.widget<Text>(download).data, '2.4 MB/s');
+    expect(find.byKey(const ValueKey('proxy-members-节点选择')), findsNothing);
+    c.updateTraffic('节点选择', const TrafficRate(upload: 2048, download: 512000));
+    await tester.pump();
+    expect(tester.widget<Text>(upload).data, '2.0 KB/s');
+    expect(tester.widget<Text>(download).data, '500.0 KB/s');
+    for (final label in ['列表', '紧凑', '卡片']) {
+      await tester.tap(find.byTooltip('页面布局'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+      expect(download, findsOneWidget);
+      expect(tester.takeException(), isNull, reason: label);
+    }
+    // Exercise wrapping with enlarged text and large rates on a narrow screen.
+    tester.platformDispatcher.textScaleFactorTestValue = 1.4;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    c.updateTraffic(
+      '节点选择',
+      const TrafficRate(upload: 512000, download: 999999999),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
+
   testWidgets('settings validates a controller URL', (tester) async {
     final c = await mount(tester, const Size(390, 844));
     await tester.tap(find.text('设置').last);

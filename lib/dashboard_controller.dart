@@ -5,6 +5,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'clash_api.dart';
 import 'models.dart';
 import 'controller_store.dart';
+import 'group_traffic.dart';
 
 class DashboardController extends ChangeNotifier {
   DashboardController({
@@ -27,6 +28,10 @@ class DashboardController extends ChangeNotifier {
   String? providerError;
   List<LogEntry> logs = [];
   List<Map<String, dynamic>> connections = [], rules = [];
+  final _groupTraffic = GroupTrafficTracker();
+  final _trafficClock = Stopwatch()..start();
+  Timer? _connectionTrafficExpiry;
+  TrafficRate? trafficFor(String groupName) => _groupTraffic.rateFor(groupName);
   num up = 0, down = 0, uploadTotal = 0, downloadTotal = 0, memory = 0;
   List<double> downloadHistory = List.filled(40, 0),
       uploadHistory = List.filled(40, 0);
@@ -121,6 +126,8 @@ class DashboardController extends ChangeNotifier {
 
   void _stop() {
     _generation++;
+    _connectionTrafficExpiry?.cancel();
+    _groupTraffic.reset();
     _reconnectTimer?.cancel();
     for (final timer in _retries) {
       timer.cancel();
@@ -335,6 +342,10 @@ class DashboardController extends ChangeNotifier {
       if (retryScheduled || generation != _generation || _disposed) return;
       retryScheduled = true;
       liveStreams.remove(path);
+      if (path == '/connections') {
+        _connectionTrafficExpiry?.cancel();
+        _groupTraffic.reset();
+      }
       _emit();
       if (channel != null) {
         _sockets.remove(channel);
@@ -367,10 +378,21 @@ class DashboardController extends ChangeNotifier {
             }
             if (path == '/memory') memory = data['inuse'] as num? ?? 0;
             if (path == '/connections') {
-              connections = (data['connections'] as List? ?? [])
+              final nextConnections = (data['connections'] as List? ?? [])
                   .cast<Map<String, dynamic>>();
+              _groupTraffic.update(
+                nextConnections,
+                timestamp: _trafficClock.elapsed,
+              );
+              connections = nextConnections;
               uploadTotal = data['uploadTotal'] as num? ?? 0;
               downloadTotal = data['downloadTotal'] as num? ?? 0;
+              _connectionTrafficExpiry?.cancel();
+              _connectionTrafficExpiry = Timer(const Duration(seconds: 4), () {
+                if (generation != _generation || _disposed) return;
+                _groupTraffic.reset();
+                _emit();
+              });
             }
             if (path == '/logs') _addLog(LogEntry.fromJson(data));
             liveStreams.add(path);
