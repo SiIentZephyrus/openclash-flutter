@@ -68,12 +68,8 @@ void main() {
       await tester.pumpAndSettle();
       await capture(page.value);
       if (page.key == '代理') {
-        await tester.tap(
-          find.byKey(const ValueKey('group-node-menu-节点选择-自动选择')),
-        );
-        await tester.pumpAndSettle();
-        await capture('group-node-menu');
-        await tester.tap(find.text('查看策略组'));
+        await capture('group-node-button');
+        await tester.tap(find.byKey(const ValueKey('view-group-节点选择-自动选择')));
         await tester.pumpAndSettle();
         await capture('group-node-jump');
         await tester.tap(find.byTooltip('返回顶部'));

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:scroll_to_index/scroll_to_index.dart';
 import 'dashboard_controller.dart';
 import 'main.dart';
 import 'models.dart';
@@ -22,9 +22,13 @@ class _ProxiesPageState extends State<ProxiesPage> {
   String query = '', searchScope = 'all', sort = 'default', layout = 'card';
   bool layoutChanged = false;
   final search = TextEditingController();
-  final scroll = AutoScrollController(axis: Axis.vertical);
+  final scroll = ScrollController();
   final Set<String> collapsed = {}, opened = {};
   final Set<String> revealed = {};
+  final Map<String, GlobalKey> groupHeaders = {};
+  final Map<String, GlobalKey> groupPanels = {};
+  double bottomPadding = 96;
+  int jumpGeneration = 0;
   String? highlightedGroup;
   Timer? highlightTimer;
   DashboardController get c => widget.controller;
@@ -36,6 +40,36 @@ class _ProxiesPageState extends State<ProxiesPage> {
       if (group != null && group.isGroup) groups.putIfAbsent(name, () => group);
     }
     return groups.values.toList();
+  }
+
+  Future<void> _afterLayout() {
+    final binding = WidgetsBinding.instance;
+    final frame = binding.endOfFrame;
+    // endOfFrame alone does not schedule another frame when called during
+    // post-frame callbacks. Filtering can leave the scroll offset unchanged.
+    binding.scheduleFrame();
+    return frame;
+  }
+
+  RenderBox? _boxFor(GlobalKey? key) {
+    final element = key?.currentContext;
+    // Keys may still reference an inactive element while filtering reparents
+    // children. Inspect its render object directly, then require attachment.
+    if (element is! RenderObjectElement) return null;
+    final box = element.renderObject;
+    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+    // A cached child can retain a size while its new sliver layout offset is
+    // still null. Such a box cannot be used by getOffsetToReveal yet.
+    RenderObject child = box;
+    while (child.parent != null) {
+      final parent = child.parent!;
+      if (parent is RenderSliver && parent.childScrollOffset(child) == null) {
+        return null;
+      }
+      if (parent is RenderAbstractViewport) return box;
+      child = parent;
+    }
+    return null;
   }
 
   Future<void> _jumpToGroup(String name) async {
@@ -51,7 +85,12 @@ class _ProxiesPageState extends State<ProxiesPage> {
       );
       return;
     }
+    final view = View.of(context);
+    final notices = AppNoticeHost.maybeOf(context);
     FocusScope.of(context).unfocus();
+    final generation = ++jumpGeneration;
+    bool active() =>
+        mounted && generation == jumpGeneration && scroll.hasClients;
     highlightTimer?.cancel();
     search.clear();
     setState(() {
@@ -60,15 +99,121 @@ class _ProxiesPageState extends State<ProxiesPage> {
       revealed.add(name);
       collapsed.remove(name);
       opened.add(name);
-      highlightedGroup = name;
+      highlightedGroup = null;
     });
     // Clear filters and lay out the expanded target before locating its index.
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted || !scroll.hasClients) return;
+    await _afterLayout();
+    if (!mounted || !active()) return;
+    // Keyboard dismissal changes the viewport on Android. Finish it before
+    // calculating an offset, rather than aligning against the old viewport.
+    for (var frame = 0; frame < 30 && view.viewInsets.bottom > 0; frame++) {
+      await _afterLayout();
+      if (!mounted || !active()) return;
+    }
     final index = _displayGroups.indexWhere((g) => g.name == name);
     if (index < 0) return;
-    await scroll.scrollToIndex(index, preferPosition: AutoScrollPosition.begin);
-    if (!mounted) return;
+    RenderBox? headerBox() {
+      return _boxFor(groupHeaders[name]);
+    }
+
+    // Seek across measured group boundaries. Do not wait on an index-based
+    // animation while filtering is replacing the list's scroll geometry.
+    for (
+      var attempt = 0;
+      attempt < _displayGroups.length * 2 + 8 && headerBox() == null;
+      attempt++
+    ) {
+      final groups = _displayGroups;
+      RenderBox? nearest;
+      var nearestIndex = -1;
+      for (var i = 0; i < groups.length; i++) {
+        final box = _boxFor(groupPanels[groups[i].name]);
+        if (box != null &&
+            (nearestIndex < 0 ||
+                (i - index).abs() < (nearestIndex - index).abs())) {
+          nearest = box;
+          nearestIndex = i;
+        }
+      }
+      if (nearest != null) {
+        final forward = index > nearestIndex;
+        final viewport = RenderAbstractViewport.of(nearest);
+        final edge = viewport
+            .getOffsetToReveal(nearest, forward ? 1 : 0)
+            .offset;
+        final distance = scroll.position.viewportDimension;
+        final next = forward
+            ? (edge + distance + 1).clamp(scroll.offset + 1, double.infinity)
+            : (edge - distance * .8).clamp(
+                double.negativeInfinity,
+                scroll.offset - 1,
+              );
+        scroll.jumpTo(
+          next
+              .clamp(
+                scroll.position.minScrollExtent,
+                scroll.position.maxScrollExtent,
+              )
+              .toDouble(),
+        );
+      }
+      await _afterLayout();
+      if (!active()) return;
+    }
+    var aligned = false;
+    var stableFrames = 0;
+    for (var attempt = 0; attempt < 6; attempt++) {
+      final box = headerBox();
+      if (!active()) return;
+      if (box == null) break;
+      final viewport = RenderAbstractViewport.of(box);
+      final target = viewport.getOffsetToReveal(box, 0).offset - 4;
+      final shortfall = target - scroll.position.maxScrollExtent;
+      if (shortfall > .5) {
+        // A short final group needs enough trailing room to put its header
+        // below the fixed search bar. Keep that room after highlight fades.
+        setState(() => bottomPadding += shortfall + 1);
+        await _afterLayout();
+        if (!active()) return;
+        continue;
+      }
+      final offset = target
+          .clamp(
+            scroll.position.minScrollExtent,
+            scroll.position.maxScrollExtent,
+          )
+          .toDouble();
+      if ((scroll.offset - offset).abs() <= .75) {
+        if (++stableFrames >= 2) {
+          aligned = true;
+          break;
+        }
+        await _afterLayout();
+        if (!active()) return;
+        continue;
+      }
+      stableFrames = 0;
+      await scroll.animateTo(
+        offset,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+      );
+      if (!active()) return;
+      await _afterLayout();
+      if (!active()) return;
+    }
+    if (!mounted || !active()) return;
+    if (!aligned) {
+      notices?.show(
+        const AppNotice(
+          title: '未能定位策略组',
+          message: '请重试查看策略组',
+          tone: NoticeTone.warning,
+        ),
+      );
+      return;
+    }
+    setState(() => highlightedGroup = name);
     highlightTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => highlightedGroup = null);
     });
@@ -97,6 +242,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
 
   @override
   void dispose() {
+    jumpGeneration++;
     highlightTimer?.cancel();
     search.dispose();
     scroll.dispose();
@@ -486,7 +632,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                     keyboardDismissBehavior:
                         ScrollViewKeyboardDismissBehavior.onDrag,
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 96),
+                    padding: EdgeInsets.fromLTRB(20, 4, 20, bottomPadding),
                     children: [
                       SizedBox(
                         width: double.infinity,
@@ -553,14 +699,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                             '请检查 OpenClash 配置中的 proxy-groups',
                           ),
                         ),
-                      for (final (index, group) in groups.indexed)
-                        if (_visibleGroup(group))
-                          AutoScrollTag(
-                            key: ValueKey('proxy-group-anchor-${group.name}'),
-                            controller: scroll,
-                            index: index,
-                            child: _group(group),
-                          ),
+                      for (final group in visible) _group(group),
                       if (query.trim().isNotEmpty && visible.isEmpty)
                         EmptyState(
                           searchScope == 'groups' ? '没有匹配的策略组' : '没有匹配的节点',
@@ -611,9 +750,10 @@ class _ProxiesPageState extends State<ProxiesPage> {
             !opened.contains(group.name) &&
             query.trim().isEmpty);
     return Padding(
-      key: ValueKey('proxy-group-${group.name}'),
+      key: groupPanels.putIfAbsent(group.name, GlobalKey.new),
       padding: const EdgeInsets.only(bottom: 12),
       child: Panel(
+        key: ValueKey('proxy-group-${group.name}'),
         color: highlightedGroup == group.name ? const Color(0xFFF1FAF6) : null,
         padding: EdgeInsets.zero,
         child: Column(
@@ -631,6 +771,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                 }
               }),
               child: Padding(
+                key: groupHeaders.putIfAbsent(group.name, GlobalKey.new),
                 padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -748,15 +889,24 @@ class _ProxiesPageState extends State<ProxiesPage> {
                               layout: layout,
                               selected: group.now == name,
                               enabled:
-                                  group.selectable &&
-                                  !c.switching.contains(group.name),
+                                  !c.switching.contains(group.name) &&
+                                  (group.selectable ||
+                                      (group.now == name &&
+                                          c.proxies[name]?.isGroup == true)),
                               onTap: () => runAction(
-                                context,
-                                () => c.select(group, name),
+                                this.context,
+                                () =>
+                                    group.now == name &&
+                                        c.proxies[name]?.isGroup == true
+                                    ? _jumpToGroup(name)
+                                    : c.select(group, name),
                               ),
                               onTest: () => _test(() => c.testNodeDelay(name)),
                               onViewGroup: () => unawaited(
-                                runAction(context, () => _jumpToGroup(name)),
+                                runAction(
+                                  this.context,
+                                  () => _jumpToGroup(name),
+                                ),
                               ),
                               groupName: group.name,
                             ),
@@ -938,38 +1088,22 @@ class _NodeTile extends StatelessWidget {
         ),
       ),
     );
-    final groupMenu = SizedBox(
+    final jump = SizedBox(
       width: 32,
       height: 32,
-      child: PopupMenuButton<String>(
-        key: ValueKey('group-node-menu-$groupName-${node.name}'),
-        tooltip: '策略组 ${node.name} 操作',
+      child: IconButton(
+        key: ValueKey('view-group-$groupName-${node.name}'),
+        tooltip: '查看策略组 ${node.name}',
         padding: EdgeInsets.zero,
-        icon: const Icon(Icons.more_horiz_rounded, size: 19, color: accent),
-        onSelected: (_) => onViewGroup(),
-        itemBuilder: (_) => [
-          PopupMenuItem(
-            value: 'view',
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                Icon(
-                  Icons.format_list_bulleted_rounded,
-                  size: 18,
-                  color: accent,
-                ),
-                SizedBox(width: 10),
-                Text('查看策略组'),
-              ],
-            ),
-          ),
-        ],
+        icon: const Icon(Icons.shortcut_rounded, size: 18, color: accent),
+        onPressed: onViewGroup,
       ),
     );
     return Semantics(
       selected: selected,
       button: true,
       label: '${node.name}${selected ? '，已选择' : ''}',
+      hint: node.isGroup && selected ? '点击查看策略组' : null,
       child: Material(
         color: selected ? const Color(0xFFEDF8F3) : const Color(0xFFFAFBFB),
         shape: RoundedRectangleBorder(
@@ -1006,7 +1140,7 @@ class _NodeTile extends StatelessWidget {
                   badge,
                   const SizedBox(width: 3),
                   test,
-                  if (node.isGroup) groupMenu,
+                  if (node.isGroup) jump,
                   selectedIcon,
                 ],
               ),
@@ -1025,7 +1159,7 @@ class _NodeTile extends StatelessWidget {
                     children: [
                       Expanded(child: badge),
                       test,
-                      if (node.isGroup) groupMenu,
+                      if (node.isGroup) jump,
                     ],
                   ),
                 ],
@@ -1035,9 +1169,21 @@ class _NodeTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      if (node.isGroup) groupMenu else RegionIcon(node.name),
+                      if (node.isGroup)
+                        const SizedBox(
+                          width: 20,
+                          height: 34,
+                          child: Icon(
+                            Icons.layers_outlined,
+                            size: 18,
+                            color: accent,
+                          ),
+                        )
+                      else
+                        RegionIcon(node.name),
                       const Spacer(),
                       test,
+                      if (node.isGroup) jump,
                       selectedIcon,
                     ],
                   ),

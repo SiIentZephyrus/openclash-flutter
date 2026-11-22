@@ -1279,7 +1279,7 @@ class _SettingsPageState extends State<SettingsPage> {
         const SizedBox(height: 25),
         const Center(
           child: Text(
-            'OpenClash Mobile  1.0.7\nInspired by MetaCubeXD · Built with Flutter',
+            'OpenClash Mobile  1.0.8\nInspired by MetaCubeXD · Built with Flutter',
             textAlign: TextAlign.center,
             style: TextStyle(color: muted, fontSize: 10, height: 2),
           ),

@@ -6,6 +6,7 @@ import 'package:openclash_client/group_traffic.dart';
 
 // UI fixtures are test-only. Production has no sample data or demo mode.
 class FixtureController extends DashboardController {
+  int selectionCalls = 0;
   final trafficRates = <String, TrafficRate>{
     '节点选择': const TrafficRate(upload: 128 * 1024, download: 2.4 * 1048576),
     '流媒体': const TrafficRate(upload: 24 * 1024, download: 1.2 * 1048576),
@@ -138,6 +139,7 @@ class FixtureController extends DashboardController {
 
   @override
   Future<void> select(ProxyNode group, String name) async {
+    selectionCalls++;
     group.now = name;
     notifyListeners();
   }
