@@ -1,0 +1,144 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:openclash_client/dashboard_controller.dart';
+import 'package:openclash_client/models.dart';
+
+void main() {
+  test(
+    'strategy groups follow GLOBAL config order instead of response order',
+    () {
+      final controller = DashboardController();
+      addTearDown(controller.dispose);
+      ProxyNode group(
+        String name, {
+        List<String> members = const ['HK'],
+        bool hidden = false,
+      }) => ProxyNode(
+        name: name,
+        type: 'Selector',
+        members: members,
+        hidden: hidden,
+      );
+      controller.proxies = {
+        'C': group('C'),
+        'B': group('B'),
+        'A': group('A'),
+        'hidden': group('hidden', hidden: true),
+        'tail-2': group('tail-2'),
+        'tail-1': group('tail-1'),
+        'HK': ProxyNode(name: 'HK', type: 'Trojan'),
+        'GLOBAL': group(
+          'GLOBAL',
+          members: ['HK', 'A', 'hidden', 'missing', 'B', 'A', 'C'],
+        ),
+      };
+      expect(controller.groups.map((g) => g.name), [
+        'A',
+        'B',
+        'C',
+        'tail-2',
+        'tail-1',
+      ]);
+      controller.mode = 'global';
+      expect(controller.groups.map((g) => g.name), [
+        'GLOBAL',
+        'A',
+        'B',
+        'C',
+        'tail-2',
+        'tail-1',
+      ]);
+      controller.mode = 'rule';
+      controller.proxies.remove('GLOBAL');
+      expect(controller.groups.map((g) => g.name), [
+        'C',
+        'B',
+        'A',
+        'tail-2',
+        'tail-1',
+      ]);
+    },
+  );
+  test(
+    'real HTTP/WS flow authenticates, streams logs, and preserves selection on failure',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final sockets = <WebSocket>[];
+      final controller = DashboardController();
+      var failSelection = true;
+      final updates = <String>[];
+      final listener = server.listen((request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          expect(request.uri.queryParameters['token'], 'secret');
+          final socket = await WebSocketTransformer.upgrade(request);
+          sockets.add(socket);
+          final data = switch (request.uri.path) {
+            '/logs' => {'type': 'info', 'payload': 'live test log'},
+            '/traffic' => {'up': 1024, 'down': 4096},
+            '/memory' => {'inuse': 2048},
+            _ => {'connections': [], 'uploadTotal': 100, 'downloadTotal': 200},
+          };
+          socket.add(jsonEncode(data));
+          return;
+        }
+        expect(request.headers.value('Authorization'), 'Bearer secret');
+        Object data = {};
+        if (request.uri.path == '/version') data = {'version': 'test-mihomo'};
+        if (request.uri.path == '/configs') data = {'mode': 'rule'};
+        if (request.uri.path == '/rules') data = {'rules': []};
+        if (request.uri.path == '/proxies') {
+          data = {
+            'proxies': {
+              '选择 / 组': {
+                'type': 'Selector',
+                'now': '香港',
+                'all': ['香港', '日本'],
+              },
+              '香港': {'type': 'Trojan', 'history': []},
+              '日本': {'type': 'Trojan', 'history': []},
+            },
+          };
+        }
+        if (request.method == 'PUT') {
+          final body = jsonDecode(await utf8.decoder.bind(request).join());
+          updates.add(body['name'] as String);
+          request.response.statusCode = failSelection ? 500 : 204;
+        } else {
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode(data));
+        }
+        await request.response.close();
+      });
+      try {
+        await controller.connect('http://127.0.0.1:${server.port}', 'secret');
+        expect(controller.connected, isTrue);
+        for (var i = 0; i < 100 && controller.logs.isEmpty; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(controller.logs.single.message, 'live test log');
+        expect(controller.down, 4096);
+        final group = controller.groups.single;
+        await expectLater(controller.select(group, '日本'), throwsException);
+        expect(group.now, '香港');
+        expect(controller.switching, isEmpty);
+        failSelection = false;
+        await controller.select(group, '日本');
+        expect(group.now, '日本');
+        expect(updates, ['日本', '日本']);
+        await controller.changeMode('direct');
+        expect(controller.mode, 'direct');
+        controller.disconnect();
+        expect(controller.connected, isFalse);
+        expect(controller.liveStreams, isEmpty);
+      } finally {
+        controller.dispose();
+        for (final socket in sockets) {
+          await socket.close();
+        }
+        await listener.cancel();
+        await server.close(force: true);
+      }
+    },
+  );
+}
