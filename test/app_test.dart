@@ -5,6 +5,7 @@ import 'package:openclash_client/dashboard_controller.dart';
 import 'support/fixture_controller.dart';
 import 'package:openclash_client/main.dart';
 import 'package:openclash_client/group_traffic.dart';
+import 'package:openclash_client/models.dart';
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -257,6 +258,155 @@ void main() {
       '节点选择',
       const TrafficRate(upload: 512000, download: 999999999),
     );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
+
+  for (final option in {'卡片': 'card', '列表': 'list', '紧凑': 'compact'}.entries) {
+    testWidgets(
+      'group menu reveals all members without selection in ${option.value}',
+      (tester) async {
+        final c = await mount(tester, const Size(320, 740));
+        await tester.tap(find.text('代理').last);
+        await tester.pumpAndSettle();
+        if (option.value != 'card') {
+          await tester.tap(find.byTooltip('页面布局'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text(option.key));
+          await tester.pumpAndSettle();
+        }
+        final original = c.proxies['节点选择']!.now;
+        await tester.tap(find.text('节点', skipOffstage: false).first);
+        await tester.enterText(
+          find.byKey(const ValueKey('proxy-search')),
+          '自动选择',
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('proxy-group-自动选择')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('group-node-menu-节点选择-香港 · HKT 01')),
+          findsNothing,
+        );
+        final menu = find.byKey(const ValueKey('group-node-menu-节点选择-自动选择'));
+        await tester.ensureVisible(menu);
+        await tester.tap(menu);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('查看策略组'));
+        await tester.pumpAndSettle();
+        expect(c.proxies['节点选择']!.now, original);
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const ValueKey('proxy-search')))
+              .controller!
+              .text,
+          isEmpty,
+        );
+        final target = find.byKey(const ValueKey('proxy-group-header-自动选择'));
+        final listTop = tester
+            .getTopLeft(find.byKey(const ValueKey('proxy-list')))
+            .dy;
+        expect(tester.getTopLeft(target).dy, closeTo(listTop, 4));
+        final members = find.byKey(
+          ValueKey('proxy-layout-${option.value}-自动选择'),
+        );
+        expect(
+          tester.widget<Wrap>(members).children.length,
+          c.proxies['自动选择']!.members.length,
+        );
+        expect(
+          find.descendant(of: members, matching: find.text('美国 · San Jose')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        c.dispose();
+      },
+    );
+  }
+
+  testWidgets(
+    'jump reaches an unbuilt hidden group and navigates back up a long list',
+    (tester) async {
+      final c = await mount(tester, const Size(360, 740));
+      final names = c.proxies['自动选择']!.members;
+      for (var i = 0; i < 40; i++) {
+        c.proxies['中间组-$i'] = ProxyNode(
+          name: '中间组-$i',
+          type: i.isEven ? 'Selector' : 'URLTest',
+          members: names.take(4).toList(),
+        );
+      }
+      c.proxies['远处的隐藏组'] = ProxyNode(
+        name: '远处的隐藏组',
+        type: 'URLTest',
+        hidden: true,
+        members: ['节点选择', ...names],
+      );
+      c.proxies['节点选择']!.members.insert(0, '远处的隐藏组');
+      final original = c.proxies['节点选择']!.now;
+      await tester.tap(find.text('代理').last);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('proxy-group-远处的隐藏组')), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('group-node-menu-节点选择-远处的隐藏组')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('查看策略组'));
+      await tester.pumpAndSettle();
+      final list = tester.widget<ListView>(
+        find.byKey(const ValueKey('proxy-list')),
+      );
+      expect(list.controller!.offset, greaterThan(4000));
+      final listTop = tester
+          .getTopLeft(find.byKey(const ValueKey('proxy-list')))
+          .dy;
+      expect(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('proxy-group-header-远处的隐藏组')))
+            .dy,
+        closeTo(listTop, 4),
+      );
+      expect(
+        tester
+            .widget<Wrap>(
+              find.byKey(const ValueKey('proxy-layout-card-远处的隐藏组')),
+            )
+            .children
+            .length,
+        names.length + 1,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('group-node-menu-远处的隐藏组-节点选择')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('查看策略组'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('proxy-group-header-节点选择')))
+            .dy,
+        closeTo(listTop, 4),
+      );
+      expect(c.proxies['节点选择']!.now, original);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
+
+  testWidgets('leaving the proxy page during a group jump is safe', (
+    tester,
+  ) async {
+    final c = await mount(tester, const Size(360, 740));
+    await tester.tap(find.text('代理').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('group-node-menu-节点选择-自动选择')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('查看策略组'));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.text('概览').last);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

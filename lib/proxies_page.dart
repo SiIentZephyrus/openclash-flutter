@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:scroll_to_index/scroll_to_index.dart';
 import 'dashboard_controller.dart';
 import 'main.dart';
 import 'models.dart';
@@ -21,9 +22,57 @@ class _ProxiesPageState extends State<ProxiesPage> {
   String query = '', searchScope = 'all', sort = 'default', layout = 'card';
   bool layoutChanged = false;
   final search = TextEditingController();
-  final scroll = ScrollController();
+  final scroll = AutoScrollController(axis: Axis.vertical);
   final Set<String> collapsed = {}, opened = {};
+  final Set<String> revealed = {};
+  String? highlightedGroup;
+  Timer? highlightTimer;
   DashboardController get c => widget.controller;
+
+  List<ProxyNode> get _displayGroups {
+    final groups = {for (final group in c.groups) group.name: group};
+    for (final name in revealed) {
+      final group = c.proxies[name];
+      if (group != null && group.isGroup) groups.putIfAbsent(name, () => group);
+    }
+    return groups.values.toList();
+  }
+
+  Future<void> _jumpToGroup(String name) async {
+    final group = c.proxies[name];
+    if (group == null || !group.isGroup) {
+      showAppNotice(
+        context,
+        const AppNotice(
+          title: '策略组暂不可用',
+          message: '请刷新节点列表后重试',
+          tone: NoticeTone.warning,
+        ),
+      );
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    highlightTimer?.cancel();
+    search.clear();
+    setState(() {
+      query = '';
+      searchScope = 'all';
+      revealed.add(name);
+      collapsed.remove(name);
+      opened.add(name);
+      highlightedGroup = name;
+    });
+    // Clear filters and lay out the expanded target before locating its index.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !scroll.hasClients) return;
+    final index = _displayGroups.indexWhere((g) => g.name == name);
+    if (index < 0) return;
+    await scroll.scrollToIndex(index, preferPosition: AutoScrollPosition.begin);
+    if (!mounted) return;
+    highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => highlightedGroup = null);
+    });
+  }
 
   @override
   void initState() {
@@ -48,6 +97,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
 
   @override
   void dispose() {
+    highlightTimer?.cancel();
     search.dispose();
     scroll.dispose();
     super.dispose();
@@ -68,7 +118,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
 
   void _collapseAll() {
     setState(() {
-      collapsed.addAll(c.groups.map((g) => g.name));
+      collapsed.addAll(_displayGroups.map((g) => g.name));
       opened.clear();
     });
     _returnToTop();
@@ -76,7 +126,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
 
   void _expandAll() => setState(() {
     collapsed.clear();
-    opened.addAll(c.groups.map((g) => g.name));
+    opened.addAll(_displayGroups.map((g) => g.name));
   });
   bool _matchesGroup(ProxyNode g) =>
       g.name.toLowerCase().contains(query.trim().toLowerCase());
@@ -247,7 +297,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
 
   @override
   Widget build(BuildContext context) {
-    final groups = c.groups;
+    final groups = _displayGroups;
     final visible = groups.where(_visibleGroup).toList();
     return Column(
       children: [
@@ -503,7 +553,14 @@ class _ProxiesPageState extends State<ProxiesPage> {
                             '请检查 OpenClash 配置中的 proxy-groups',
                           ),
                         ),
-                      for (final group in visible) _group(group),
+                      for (final (index, group) in groups.indexed)
+                        if (_visibleGroup(group))
+                          AutoScrollTag(
+                            key: ValueKey('proxy-group-anchor-${group.name}'),
+                            controller: scroll,
+                            index: index,
+                            child: _group(group),
+                          ),
                       if (query.trim().isNotEmpty && visible.isEmpty)
                         EmptyState(
                           searchScope == 'groups' ? '没有匹配的策略组' : '没有匹配的节点',
@@ -557,6 +614,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
       key: ValueKey('proxy-group-${group.name}'),
       padding: const EdgeInsets.only(bottom: 12),
       child: Panel(
+        color: highlightedGroup == group.name ? const Color(0xFFF1FAF6) : null,
         padding: EdgeInsets.zero,
         child: Column(
           children: [
@@ -697,6 +755,9 @@ class _ProxiesPageState extends State<ProxiesPage> {
                                 () => c.select(group, name),
                               ),
                               onTest: () => _test(() => c.testNodeDelay(name)),
+                              onViewGroup: () => unawaited(
+                                runAction(context, () => _jumpToGroup(name)),
+                              ),
                               groupName: group.name,
                             ),
                           ),
@@ -831,13 +892,14 @@ class _NodeTile extends StatelessWidget {
     required this.enabled,
     required this.onTap,
     required this.onTest,
+    required this.onViewGroup,
     required this.groupName,
   });
   final ProxyNode node;
   final DashboardController controller;
   final String layout, groupName;
   final bool selected, enabled;
-  final VoidCallback onTap, onTest;
+  final VoidCallback onTap, onTest, onViewGroup;
 
   @override
   Widget build(BuildContext context) {
@@ -874,6 +936,34 @@ class _NodeTile extends StatelessWidget {
               ? muted.withValues(alpha: .4)
               : accent,
         ),
+      ),
+    );
+    final groupMenu = SizedBox(
+      width: 32,
+      height: 32,
+      child: PopupMenuButton<String>(
+        key: ValueKey('group-node-menu-$groupName-${node.name}'),
+        tooltip: '策略组 ${node.name} 操作',
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.more_horiz_rounded, size: 19, color: accent),
+        onSelected: (_) => onViewGroup(),
+        itemBuilder: (_) => [
+          PopupMenuItem(
+            value: 'view',
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Icon(
+                  Icons.format_list_bulleted_rounded,
+                  size: 18,
+                  color: accent,
+                ),
+                SizedBox(width: 10),
+                Text('查看策略组'),
+              ],
+            ),
+          ),
+        ],
       ),
     );
     return Semantics(
@@ -916,6 +1006,7 @@ class _NodeTile extends StatelessWidget {
                   badge,
                   const SizedBox(width: 3),
                   test,
+                  if (node.isGroup) groupMenu,
                   selectedIcon,
                 ],
               ),
@@ -934,6 +1025,7 @@ class _NodeTile extends StatelessWidget {
                     children: [
                       Expanded(child: badge),
                       test,
+                      if (node.isGroup) groupMenu,
                     ],
                   ),
                 ],
@@ -943,7 +1035,7 @@ class _NodeTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      RegionIcon(node.name),
+                      if (node.isGroup) groupMenu else RegionIcon(node.name),
                       const Spacer(),
                       test,
                       selectedIcon,
