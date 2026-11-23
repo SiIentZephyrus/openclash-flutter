@@ -12,6 +12,8 @@ class _ControllerFixture {
   final calls = <String, int>{};
   int active = 0, peak = 0, selections = 0;
   Completer<void>? hold;
+  final heldNodes = <String, Completer<void>>{};
+  bool failLastNodes = true;
   bool closing = false;
 
   Future<void> start() async {
@@ -65,11 +67,12 @@ class _ControllerFixture {
         active++;
         peak = max(peak, active);
         if (hold != null) await hold!.future;
+        await heldNodes[name]?.future;
         await Future<void>.delayed(const Duration(milliseconds: 25));
         active--;
-        if (name == '节点 / 10') {
+        if (failLastNodes && name == '节点 / 10') {
           request.response.statusCode = 504;
-        } else if (name == '节点 / 11') {
+        } else if (failLastNodes && name == '节点 / 11') {
           request.response.statusCode = 401;
         } else {
           data = {'delay': 42};
@@ -93,11 +96,21 @@ class _ControllerFixture {
   Future<void> close() async {
     closing = true;
     if (hold != null && !hold!.isCompleted) hold!.complete();
+    for (final gate in heldNodes.values) {
+      if (!gate.isCompleted) gate.complete();
+    }
     controller.dispose();
     for (final socket in List<WebSocket>.of(sockets)) {
       await socket.close();
     }
     await server.close(force: true);
+  }
+
+  Future<void> waitForRequests(int count) async {
+    for (var i = 0; i < 200 && calls.length < count; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(calls.length, greaterThanOrEqualTo(count));
   }
 }
 
@@ -139,6 +152,16 @@ void main() {
       expect(c.testingNodes, isEmpty);
       c.proxies['Group B']!.now = '节点 / 11';
       expect(c.delayErrorFor('Group B'), contains('认证失败'));
+      expect(c.canRetryDelays, isTrue);
+      fixture.calls.clear();
+      fixture.failLastNodes = false;
+      await c.retryFailedDelays();
+      expect(fixture.calls, {'节点 / 10': 1, '节点 / 11': 1});
+      expect(c.testTotal, 2);
+      expect(c.testCompleted, 2);
+      expect(c.testFailures + c.testTimeouts, 0);
+      expect(c.canRetryDelays, isFalse);
+      expect(c.delayErrorFor('Group B'), isNull);
     },
   );
   test(
@@ -156,6 +179,49 @@ void main() {
       expect(fixture.controller.delayFor('Group A'), 42);
     },
   );
+  test(
+    'a free worker starts the next node while a slow request is pending',
+    () async {
+      final fixture = _ControllerFixture();
+      await fixture.start();
+      addTearDown(fixture.close);
+      final slow = fixture.heldNodes['节点 / 0'] = Completer<void>();
+      final job = fixture.controller.testAllDelays();
+      await fixture.waitForRequests(7);
+      expect(slow.isCompleted, isFalse);
+      expect(fixture.controller.testingNodes, contains('节点 / 0'));
+      expect(fixture.peak, lessThanOrEqualTo(6));
+      slow.complete();
+      await job;
+      expect(fixture.controller.testCompleted, 12);
+    },
+  );
+
+  test('cancelling stops the queue and preserves prior results', () async {
+    final fixture = _ControllerFixture();
+    await fixture.start();
+    addTearDown(fixture.close);
+    fixture.hold = Completer<void>();
+    final c = fixture.controller;
+    c.proxies['节点 / 0']!.delay = 90;
+    final job = c.testAllDelays();
+    await fixture.waitForRequests(6);
+    c.cancelDelayTests();
+    // The server deliberately keeps the requests pending until the test ends.
+    await job.timeout(const Duration(seconds: 2));
+    expect(fixture.calls.length, 6);
+    expect(c.testCancelled, isTrue);
+    expect(c.testing, isFalse);
+    expect(c.testingNodes, isEmpty);
+    expect(c.testCompleted, 0);
+    expect(c.delayFor('节点 / 0'), 90);
+    expect(c.canRetryDelays, isFalse);
+    fixture.hold!.complete();
+    await c.testNodeDelay('节点 / 0');
+    expect(c.testCancelled, isFalse);
+    expect(c.delayFor('节点 / 0'), 42);
+  });
+
   test('changing controller session cancels queued latency updates', () async {
     final fixture = _ControllerFixture();
     await fixture.start();

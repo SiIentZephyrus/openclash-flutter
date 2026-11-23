@@ -123,6 +123,57 @@ void main() {
     expect(c.hasProfile, isFalse);
     expect(api.credentials, isEmpty);
   });
+
+  test(
+    'named profiles survive restart and a failed switch keeps the active profile',
+    () async {
+      final store = MemoryControllerStore();
+      final api = ApiRecorder();
+      final c = DashboardController(store: store, apiFactory: api.create);
+      addTearDown(c.dispose);
+      await c.initialize();
+      expect(
+        await c.saveController('http://home', 'home-key', name: ' 家里 '),
+        isTrue,
+      );
+      expect(
+        await c.saveController(
+          'http://work',
+          'work-key',
+          name: '办公室',
+          add: true,
+        ),
+        isTrue,
+      );
+      expect(c.savedControllers.map((profile) => profile.name), ['家里', '办公室']);
+      expect(store.profile!.name, '办公室');
+      api.unavailableHosts.add('home');
+      expect(await c.switchController('http://home'), isFalse);
+      expect(c.connected, isTrue);
+      expect(c.address, 'http://work');
+      expect(store.writes, 2);
+      api.unavailableHosts.remove('home');
+      expect(await c.switchController('http://home'), isTrue);
+      expect(c.secret, 'home-key');
+      final restored = DashboardController(
+        store: store,
+        apiFactory: api.create,
+      );
+      addTearDown(restored.dispose);
+      await restored.initialize();
+      expect(restored.controllerName, '家里');
+      expect(restored.savedControllers.length, 2);
+      store.failWrite = true;
+      await expectLater(
+        restored.removeController('http://work'),
+        throwsException,
+      );
+      expect(restored.savedControllers.length, 2);
+      store.failWrite = false;
+      await restored.removeController('http://work');
+      expect(store.profiles!.profiles.single.name, '家里');
+    },
+  );
   test(
     'unreadable local profile requires setup and does not generate sample data',
     () async {
@@ -142,21 +193,33 @@ void main() {
   test(
     'local store roundtrips one profile via secure storage and never writes secret to preferences',
     () async {
-      FlutterSecureStorage.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({
+        LocalControllerStore.profileKey:
+            '{"address":"https://old-router:9090","secret":"legacy-key"}',
+      });
       SharedPreferences.setMockInitialValues({});
-      await LocalControllerStore().save(
-        ControllerProfile('https://router:9090', 'secret-value'),
+      final store = LocalControllerStore();
+      final legacy = (await store.readProfiles())!.active;
+      expect(legacy.label, 'https://old-router:9090');
+      expect(legacy.secret, 'legacy-key');
+      await store.saveProfiles(
+        ControllerProfiles([
+          legacy,
+          ControllerProfile('https://router:9090', 'secret-value', name: '备用'),
+        ], 'https://router:9090'),
       );
-      final loaded = await LocalControllerStore().read();
-      expect(loaded!.address, 'https://router:9090');
-      expect(loaded.secret, 'secret-value');
+      final loaded = (await LocalControllerStore().readProfiles())!;
+      expect(loaded.active.address, 'https://router:9090');
+      expect(loaded.active.secret, 'secret-value');
+      expect(loaded.active.name, '备用');
+      expect(loaded.profiles.first.secret, 'legacy-key');
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getKeys(), isEmpty);
       FlutterSecureStorage.setMockInitialValues({
         LocalControllerStore.profileKey: '{broken',
       });
       await expectLater(
-        LocalControllerStore().read(),
+        LocalControllerStore().readProfiles(),
         throwsA(isA<FormatException>()),
       );
     },

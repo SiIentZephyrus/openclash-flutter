@@ -16,7 +16,8 @@ class DashboardShell extends StatefulWidget {
   State<DashboardShell> createState() => _DashboardShellState();
 }
 
-class _DashboardShellState extends State<DashboardShell> {
+class _DashboardShellState extends State<DashboardShell>
+    with WidgetsBindingObserver {
   int page = 0;
   static const labels = ['概览', '代理', '连接', '日志', '设置'];
   static const icons = [
@@ -29,12 +30,31 @@ class _DashboardShellState extends State<DashboardShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state != null) didChangeAppLifecycleState(state);
     unawaited(widget.controller.initialize());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      unawaited(widget.controller.setBackgrounded(true));
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(widget.controller.setBackgrounded(false));
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: widget.controller,
+    listenable: widget.controller.updatesFor(DashboardSection.session),
     builder: (context, _) {
       final c = widget.controller;
       if (!c.initialized) {
@@ -73,17 +93,27 @@ class _DashboardShellState extends State<DashboardShell> {
         );
       }
       final wide = MediaQuery.sizeOf(context).width >= 900;
-      final content = [
-        OverviewPage(
+      Widget content() => switch (page) {
+        0 => OverviewPage(
           controller: c,
           onProxies: () => setState(() => page = 1),
           onSettings: () => setState(() => page = 4),
         ),
-        ProxiesPage(controller: c),
-        ConnectionsPage(controller: c),
-        LogsPage(controller: c),
-        SettingsPage(controller: c),
-      ][page];
+        1 => ProxiesPage(key: ValueKey(c.sessionGeneration), controller: c),
+        2 => ConnectionsPage(key: ValueKey(c.sessionGeneration), controller: c),
+        3 => LogsPage(key: ValueKey(c.sessionGeneration), controller: c),
+        _ => SettingsPage(controller: c),
+      };
+      final updates = switch (page) {
+        0 => Listenable.merge([
+          c.updatesFor(DashboardSection.overview),
+          c.updatesFor(DashboardSection.proxies),
+        ]),
+        1 => c.updatesFor(DashboardSection.proxies),
+        2 => c.updatesFor(DashboardSection.connections),
+        3 => c.updatesFor(DashboardSection.logs),
+        _ => c.updatesFor(DashboardSection.streams),
+      };
       return Scaffold(
         appBar: AppBar(
           toolbarHeight: 76,
@@ -162,7 +192,10 @@ class _DashboardShellState extends State<DashboardShell> {
                 child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 1000),
-                    child: content,
+                    child: ListenableBuilder(
+                      listenable: updates,
+                      builder: (context, _) => content(),
+                    ),
                   ),
                 ),
               ),
@@ -1168,8 +1201,22 @@ class _SettingsPageState extends State<SettingsPage> {
   final form = GlobalKey<FormState>();
   late final address = TextEditingController(text: widget.controller.address);
   late final secret = TextEditingController(text: widget.controller.secret);
+  late final name = TextEditingController(
+    text: widget.controller.controllerName,
+  );
   late bool editing = widget.requiredSetup;
+  bool adding = false;
   bool visible = false;
+
+  @override
+  void didUpdateWidget(covariant SettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!editing && address.text != widget.controller.address) {
+      _restoreFields();
+      visible = false;
+    }
+  }
+
   @override
   void dispose() {
     if (editing && !widget.requiredSetup) {
@@ -1177,6 +1224,7 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     address.dispose();
     secret.dispose();
+    name.dispose();
     super.dispose();
   }
 
@@ -1187,9 +1235,11 @@ class _SettingsPageState extends State<SettingsPage> {
     final saved = await widget.controller.saveController(
       address.text,
       secret.text,
+      name: name.text,
+      add: adding,
     );
     if (saved) {
-      if (mounted) setState(() => editing = false);
+      if (mounted) cancelEdit();
       notices?.show(
         const AppNotice(
           title: '控制器已保存',
@@ -1200,11 +1250,17 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  void cancelEdit() {
+  void _restoreFields() {
     address.text = widget.controller.address;
     secret.text = widget.controller.secret;
+    name.text = widget.controller.controllerName;
+  }
+
+  void cancelEdit() {
+    _restoreFields();
     setState(() {
       editing = false;
+      adding = false;
       visible = false;
     });
     widget.controller.resumeAutoReconnect();
@@ -1213,6 +1269,113 @@ class _SettingsPageState extends State<SettingsPage> {
   void beginEdit() {
     widget.controller.pauseAutoReconnect();
     setState(() => editing = true);
+  }
+
+  Future<void> manageControllers() async {
+    final c = widget.controller;
+    final action = await showModalBottomSheet<(String, String)>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheet) => FractionallySizedBox(
+        heightFactor: .7,
+        child: SafeArea(
+          child: Column(
+            children: [
+              const Text(
+                '控制器列表',
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: c.savedControllers.length,
+                  itemBuilder: (context, index) {
+                    final profile = c.savedControllers[index];
+                    final active = profile.address == c.address;
+                    return ListTile(
+                      leading: Icon(
+                        active
+                            ? Icons.check_circle_outline
+                            : Icons.router_outlined,
+                        color: accent,
+                      ),
+                      title: Text(profile.label),
+                      subtitle: profile.name.isEmpty && !active
+                          ? null
+                          : Text(
+                              active
+                                  ? '当前控制器${profile.name.isEmpty ? '' : ' · ${profile.address}'}'
+                                  : profile.address,
+                            ),
+                      onTap: active
+                          ? null
+                          : () => Navigator.pop(sheet, (
+                              'switch',
+                              profile.address,
+                            )),
+                      trailing: active
+                          ? null
+                          : IconButton(
+                              tooltip: '删除 ${profile.label}',
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              onPressed: () => Navigator.pop(sheet, (
+                                'remove',
+                                profile.address,
+                              )),
+                            ),
+                    );
+                  },
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(sheet, ('add', '')),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('添加控制器'),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    final (kind, endpoint) = action;
+    switch (kind) {
+      case 'add':
+        c.pauseAutoReconnect();
+        address.clear();
+        secret.clear();
+        name.clear();
+        setState(() {
+          adding = editing = true;
+          visible = false;
+        });
+      case 'switch':
+        await runAction(context, () async {
+          if (await c.switchController(endpoint) && mounted) cancelEdit();
+        });
+      case 'remove':
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialog) => AlertDialog(
+            title: const Text('删除此控制器？'),
+            content: Text(endpoint),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialog, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialog, true),
+                child: const Text('删除'),
+              ),
+            ],
+          ),
+        );
+        if (mounted && confirmed == true) {
+          await runAction(context, () => c.removeController(endpoint));
+        }
+    }
   }
 
   @override
@@ -1232,9 +1395,20 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         const SizedBox(height: 7),
         Text(
-          widget.requiredSetup ? '首次使用请先配置，连接并保存后进入' : '自动使用已保存配置，仅在手动修改后更换',
+          widget.requiredSetup ? '首次使用请先配置，连接并保存后进入' : '保存常用控制器并快速切换',
           style: TextStyle(color: muted, fontSize: 12),
         ),
+        if (!widget.requiredSetup) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: busy || editing ? null : manageControllers,
+              icon: const Icon(Icons.router_outlined, size: 18),
+              label: const Text('管理控制器'),
+            ),
+          ),
+        ],
         const SizedBox(height: 22),
         Panel(
           child: Form(
@@ -1242,10 +1416,12 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SectionTitle(
-                  '控制器',
+                SectionTitle(
+                  editing || c.controllerName.isEmpty
+                      ? '控制器'
+                      : c.controllerName,
                   subtitle: '连接 OpenClash / Mihomo 的外部控制接口',
-                  trailing: Icon(
+                  trailing: const Icon(
                     Icons.router_outlined,
                     color: accent,
                     size: 22,
@@ -1306,6 +1482,16 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (editing) ...[
+                  TextFormField(
+                    key: const ValueKey('controller-name'),
+                    controller: name,
+                    enabled: !busy,
+                    style: const TextStyle(fontSize: 12),
+                    decoration: const InputDecoration(hintText: '控制器名称（选填）'),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 const Text(
                   '地址和密钥会加密保存在本机，下次启动自动使用。',
                   style: TextStyle(fontSize: 10, color: muted),
@@ -1350,7 +1536,9 @@ class _SettingsPageState extends State<SettingsPage> {
                         editing ? Icons.close_rounded : Icons.edit_outlined,
                         size: 16,
                       ),
-                      label: Text(editing ? '取消修改' : '修改控制器'),
+                      label: Text(
+                        editing ? (adding ? '取消添加' : '取消修改') : '修改控制器',
+                      ),
                     ),
                   ),
                 ],

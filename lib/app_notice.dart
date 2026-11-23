@@ -293,9 +293,11 @@ class TaskProgressNotice extends StatelessWidget {
     required this.title,
     required this.completed,
     required this.total,
+    this.onCancel,
   });
   final String title;
   final int completed, total;
+  final VoidCallback? onCancel;
   @override
   Widget build(BuildContext context) => Container(
     decoration: BoxDecoration(
@@ -328,6 +330,16 @@ class TaskProgressNotice extends StatelessWidget {
               key: const ValueKey('latency-progress'),
               style: const TextStyle(color: Color(0xFF267C67), fontSize: 10),
             ),
+            if (onCancel != null) ...[
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: onCancel,
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text('取消测速'),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 8),

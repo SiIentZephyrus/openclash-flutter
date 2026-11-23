@@ -41,17 +41,32 @@ class ClashApi {
     Map<String, dynamic>? body,
     Map<String, String>? query,
     Duration timeout = const Duration(seconds: 12),
+    Future<void>? abortTrigger,
   }) async {
-    final request = http.Request(method, uri(path, query));
+    final timeoutAbort = Completer<void>();
+    final request = http.AbortableRequest(
+      method,
+      uri(path, query),
+      abortTrigger: abortTrigger == null
+          ? timeoutAbort.future
+          : Future.any([timeoutAbort.future, abortTrigger]),
+    );
     request.headers.addAll({
       'Content-Type': 'application/json',
       if (secret.isNotEmpty) 'Authorization': 'Bearer $secret',
     });
     if (body != null) request.body = jsonEncode(body);
     try {
-      final response = await (() async => http.Response.fromStream(
-        await _client.send(request),
-      ))().timeout(timeout);
+      final response =
+          await (() async => http.Response.fromStream(
+            await _client.send(request),
+          ))().timeout(
+            timeout,
+            onTimeout: () {
+              timeoutAbort.complete();
+              throw TimeoutException('Controller request timed out', timeout);
+            },
+          );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw ApiException(switch (response.statusCode) {
           401 || 403 => '认证失败，请检查 API Secret',

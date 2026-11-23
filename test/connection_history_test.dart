@@ -40,6 +40,53 @@ void main() {
   });
 
   test(
+    'caps ended history by end time while keeping every live connection',
+    () {
+      final history = ConnectionHistory(maxEnded: 2);
+      history.update([
+        connection('later'),
+        connection('earlier'),
+        connection('live'),
+      ], now: Duration.zero);
+      history.update([
+        connection('later'),
+        connection('live'),
+        connection('middle'),
+      ], now: const Duration(seconds: 1));
+      history.update([
+        connection('later'),
+        connection('live'),
+        connection('another live'),
+      ], now: const Duration(seconds: 2));
+      history.update([
+        connection('live'),
+        connection('another live'),
+        connection('new live'),
+      ], now: const Duration(seconds: 3));
+      expect(history.connections.map((item) => item['id']), [
+        'later',
+        'live',
+        'middle',
+        'another live',
+        'new live',
+      ]);
+      history.update([
+        connection('middle'),
+        connection('live'),
+        connection('another live'),
+        connection('new live'),
+      ], now: const Duration(seconds: 4));
+      history.prune(const Duration(minutes: 6));
+      expect(history.connections.map((item) => item['id']), [
+        'live',
+        'middle',
+        'another live',
+        'new live',
+      ]);
+    },
+  );
+
+  test(
     'returning connections become live and get a fresh retention window',
     () {
       final history = ConnectionHistory();

@@ -8,6 +8,16 @@ import 'controller_store.dart';
 import 'group_traffic.dart';
 import 'connection_history.dart';
 
+enum DashboardSection {
+  session,
+  overview,
+  proxies,
+  groupTraffic,
+  connections,
+  logs,
+  streams,
+}
+
 class DashboardController extends ChangeNotifier {
   DashboardController({
     ControllerStore? store,
@@ -16,7 +26,15 @@ class DashboardController extends ChangeNotifier {
        _apiFactory = apiFactory ?? ClashApi.new;
   final ControllerStore _store;
   final ClashApi Function(String, String) _apiFactory;
-  ControllerProfile? _profile;
+  final _updates = {
+    for (final section in DashboardSection.values) section: ValueNotifier(0),
+  };
+  Listenable updatesFor(DashboardSection section) => _updates[section]!;
+  ControllerProfiles? _savedControllers;
+  ControllerProfile? get _profile => _savedControllers?.active;
+  List<ControllerProfile> get savedControllers =>
+      _savedControllers?.profiles ?? const [];
+  String get controllerName => _profile?.name ?? '';
   Future<void>? _initialization;
   bool initialized = false, hasProfile = false, savingProfile = false;
   bool connected = false, connecting = false, testing = false;
@@ -45,7 +63,9 @@ class DashboardController extends ChangeNotifier {
     _connectionHistoryExpiry ??= Timer.periodic(const Duration(seconds: 1), (
       _,
     ) {
-      if (_connectionHistory.prune(_trafficClock.elapsed)) _emit();
+      if (_connectionHistory.prune(_trafficClock.elapsed)) {
+        _emit(const [DashboardSection.connections]);
+      }
     });
   }
 
@@ -61,8 +81,16 @@ class DashboardController extends ChangeNotifier {
   final Map<String, String> delayErrors = {};
   int testCompleted = 0, testTotal = 0, testFailures = 0, testTimeouts = 0;
   String testLabel = '';
+  bool testCancelled = false;
+  String? testFirstError;
+  int delayOrderRevision = 0;
+  _DelayTestRun? _delayRun;
+  final _retryTargets = <String>{};
+  bool _retryAllowsProviderBatch = false;
+  bool get canRetryDelays =>
+      connected && !testing && _retryTargets.any(canTest);
   String get testSummary =>
-      '测速完成：成功 ${testCompleted - testFailures - testTimeouts}，超时 $testTimeouts，失败 $testFailures${testFailures > 0 && delayErrors.isNotEmpty ? '；${delayErrors.values.first}' : ''}';
+      '测速完成：成功 ${testCompleted - testFailures - testTimeouts}，超时 $testTimeouts，失败 $testFailures${testFirstError == null ? '' : '；$testFirstError'}';
 
   bool canTest(String name) {
     final node = proxies[name];
@@ -109,8 +137,12 @@ class DashboardController extends ChangeNotifier {
   ClashApi? _api;
   Timer? _reconnectTimer;
   int _generation = 0;
+  int get sessionGeneration => _generation;
   bool _disposed = false;
   bool _autoReconnectPaused = false;
+  bool _backgrounded = false;
+  int _streamGeneration = 0;
+  bool _liveUpdatesStarted = false;
   List<ProxyNode> get groups {
     // /proxies is an unordered object. GLOBAL.all retains the config order.
     // Keep groups missing from that list in their original response order.
@@ -141,17 +173,44 @@ class DashboardController extends ChangeNotifier {
       )
       .length;
 
-  void _emit() {
-    if (!_disposed) notifyListeners();
+  @override
+  void notifyListeners() => _emit();
+
+  void _emit([Iterable<DashboardSection> sections = DashboardSection.values]) {
+    if (_disposed) return;
+    for (final section in sections) {
+      final update = _updates[section]!;
+      update.value++;
+    }
+    super.notifyListeners();
   }
 
   void _stop() {
     _generation++;
+    _delayRun?.cancel();
+    _delayRun = null;
+    _retryTargets.clear();
+    _reconnectTimer?.cancel();
+    _stopStreams();
+    _api?.close();
+    _api = null;
+    switching.clear();
+    testing = false;
+    testCancelled = false;
+    testFirstError = null;
+    testingNodes.clear();
+    delayErrors.clear();
+    testCompleted = testTotal = testFailures = testTimeouts = 0;
+    testLabel = '';
+  }
+
+  void _stopStreams() {
+    _streamGeneration++;
+    _liveUpdatesStarted = false;
     _connectionHistoryExpiry?.cancel();
     _connectionHistoryExpiry = null;
     _connectionTrafficExpiry?.cancel();
     _groupTraffic.reset();
-    _reconnectTimer?.cancel();
     for (final timer in _retries) {
       timer.cancel();
     }
@@ -165,14 +224,6 @@ class DashboardController extends ChangeNotifier {
     }
     _sockets.clear();
     liveStreams.clear();
-    _api?.close();
-    _api = null;
-    switching.clear();
-    testing = false;
-    testingNodes.clear();
-    delayErrors.clear();
-    testCompleted = testTotal = testFailures = testTimeouts = 0;
-    testLabel = '';
   }
 
   void _resetMetrics() {
@@ -193,12 +244,12 @@ class DashboardController extends ChangeNotifier {
 
   Future<void> _initialize() async {
     try {
-      final profile = await _store.read();
+      final saved = await _store.readProfiles();
       if (_disposed) return;
-      if (profile != null) {
-        _profile = profile;
+      if (saved != null) {
+        _savedControllers = saved;
         hasProfile = true;
-        address = profile.address;
+        address = saved.activeAddress;
       } else {
         address = await _store.addressHint() ?? '';
       }
@@ -225,15 +276,74 @@ class DashboardController extends ChangeNotifier {
     _readProxies(values[2]);
     _readProviders(values[3]);
     connected = true;
+    _startLiveUpdates();
+  }
+
+  void _startLiveUpdates() {
+    if (_backgrounded || _liveUpdatesStarted || _api == null) return;
+    _liveUpdatesStarted = true;
     for (final path in ['/traffic', '/memory', '/connections', '/logs']) {
-      unawaited(_listen(path, _generation));
+      unawaited(_listen(path, _streamGeneration));
     }
     unawaited(loadRules());
   }
 
-  Future<bool> saveController(String endpoint, String secret) async {
+  Future<bool> saveController(
+    String endpoint,
+    String secret, {
+    String name = '',
+    bool add = false,
+  }) async {
+    final profile = ControllerProfile(endpoint, secret, name: name);
+    final replacing = add ? null : _savedControllers?.activeAddress;
+    if (savedControllers.any(
+      (saved) => saved.address == profile.address && saved.address != replacing,
+    )) {
+      throw ApiException('此地址已有配置，请从控制器列表切换');
+    }
+    final profiles = [
+      for (final saved in savedControllers)
+        if (saved.address == replacing) profile else saved,
+      if (replacing == null) profile,
+    ];
+    return _activateController(ControllerProfiles(profiles, profile.address));
+  }
+
+  Future<bool> switchController(String address) async {
+    if (address == _savedControllers?.activeAddress) return true;
+    return _activateController(ControllerProfiles(savedControllers, address));
+  }
+
+  Future<void> removeController(String address) async {
+    final saved = _savedControllers;
+    if (savingProfile ||
+        connecting ||
+        saved == null ||
+        address == saved.activeAddress) {
+      return;
+    }
+    final remaining = saved.profiles.where(
+      (profile) => profile.address != address,
+    );
+    final next = ControllerProfiles(remaining, saved.activeAddress);
+    if (next.profiles.length == saved.profiles.length) return;
+    savingProfile = true;
+    _emit(const [DashboardSection.session]);
+    try {
+      await _store.saveProfiles(next);
+      if (!_disposed) _savedControllers = next;
+    } catch (_) {
+      throw ApiException('无法删除本机配置，请重试');
+    } finally {
+      savingProfile = false;
+      _emit(const [DashboardSection.session]);
+      if (!_backgrounded && !connected) _retrySavedLater();
+    }
+  }
+
+  Future<bool> _activateController(ControllerProfiles next) async {
     if (savingProfile || connecting) return false;
-    final profile = ControllerProfile(endpoint, secret);
+    final profile = next.active;
     final candidate = _apiFactory(profile.address, profile.secret);
     savingProfile = true;
     error = null;
@@ -249,14 +359,14 @@ class DashboardController extends ChangeNotifier {
       }
       if (_disposed) return false;
       try {
-        await _store.save(profile);
+        await _store.saveProfiles(next);
       } catch (_) {
         throw ApiException('无法保存到本机，请重试；原有配置未更改');
       }
       if (_disposed) return false;
       _stop();
       _resetMetrics();
-      _profile = profile;
+      _savedControllers = next;
       hasProfile = true;
       address = profile.address;
       _autoReconnectPaused = false;
@@ -286,14 +396,14 @@ class DashboardController extends ChangeNotifier {
 
   Future<void> reconnect() async {
     final profile = _profile;
-    if (profile != null && !connecting && !savingProfile) {
+    if (profile != null && !connecting && !savingProfile && !_backgrounded) {
       await connect(profile.address, profile.secret);
     }
   }
 
   void _retrySavedLater() {
     _reconnectTimer?.cancel();
-    if (_disposed || _autoReconnectPaused) return;
+    if (_disposed || _autoReconnectPaused || _backgrounded) return;
     _reconnectTimer = Timer(
       const Duration(seconds: 5),
       () => unawaited(reconnect()),
@@ -314,6 +424,51 @@ class DashboardController extends ChangeNotifier {
   void resumeAutoReconnect() {
     _autoReconnectPaused = false;
     if (!connected && _profile != null) _retrySavedLater();
+  }
+
+  Future<void> setBackgrounded(bool backgrounded) async {
+    if (_disposed || _backgrounded == backgrounded) return;
+    _backgrounded = backgrounded;
+    if (backgrounded) {
+      _reconnectTimer?.cancel();
+      _stopStreams();
+      up = down = 0;
+      _emit(const [
+        DashboardSection.overview,
+        DashboardSection.groupTraffic,
+        DashboardSection.logs,
+        DashboardSection.streams,
+      ]);
+      return;
+    }
+
+    if (_connectionHistory.prune(_trafficClock.elapsed)) {
+      _emit(const [DashboardSection.connections]);
+    }
+    if (!connected) {
+      if (!_autoReconnectPaused) await reconnect();
+      return;
+    }
+    final api = _api;
+    if (api == null) return;
+    _startLiveUpdates();
+    if (savingProfile) return;
+    final generation = _streamGeneration;
+    bool current() =>
+        !_disposed && !_backgrounded && generation == _streamGeneration;
+    try {
+      final values = await _fetchInitial(api);
+      if (!current() || savingProfile) return;
+      _applyInitial(values);
+      _emit(const [DashboardSection.proxies]);
+    } catch (e) {
+      if (!current() || savingProfile) return;
+      _stopStreams();
+      connected = false;
+      error = e.toString();
+      _emit();
+      _retrySavedLater();
+    }
   }
 
   void disconnect() {
@@ -358,19 +513,26 @@ class DashboardController extends ChangeNotifier {
   }
 
   Future<void> _listen(String path, int generation) async {
-    if (generation != _generation || _api == null) return;
+    bool current() =>
+        !_disposed && !_backgrounded && generation == _streamGeneration;
+    if (!current() || _api == null) return;
     WebSocketChannel? channel;
     StreamSubscription<dynamic>? subscription;
     var retryScheduled = false;
+    void streamStatusChanged() => _emit([
+      DashboardSection.streams,
+      if (path == '/logs') DashboardSection.logs,
+      if (path == '/connections') DashboardSection.groupTraffic,
+    ]);
     void retry() {
-      if (retryScheduled || generation != _generation || _disposed) return;
+      if (retryScheduled || !current()) return;
       retryScheduled = true;
       liveStreams.remove(path);
       if (path == '/connections') {
         _connectionTrafficExpiry?.cancel();
         _groupTraffic.reset();
       }
-      _emit();
+      streamStatusChanged();
       if (channel != null) {
         _sockets.remove(channel);
         unawaited(channel.sink.close());
@@ -392,7 +554,7 @@ class DashboardController extends ChangeNotifier {
       _sockets.add(channel);
       subscription = channel.stream.listen(
         (event) {
-          if (generation != _generation) return;
+          if (!current()) return;
           try {
             final data = jsonDecode(event as String) as Map<String, dynamic>;
             if (path == '/traffic') {
@@ -414,14 +576,22 @@ class DashboardController extends ChangeNotifier {
               downloadTotal = data['downloadTotal'] as num? ?? 0;
               _connectionTrafficExpiry?.cancel();
               _connectionTrafficExpiry = Timer(const Duration(seconds: 4), () {
-                if (generation != _generation || _disposed) return;
+                if (!current()) return;
                 _groupTraffic.reset();
-                _emit();
+                _emit(const [DashboardSection.groupTraffic]);
               });
             }
             if (path == '/logs') _addLog(LogEntry.fromJson(data));
-            liveStreams.add(path);
-            _emit();
+            final firstFrame = liveStreams.add(path);
+            _emit([
+              if (path != '/logs') DashboardSection.overview,
+              if (path == '/logs') DashboardSection.logs,
+              if (path == '/connections') ...const [
+                DashboardSection.connections,
+                DashboardSection.groupTraffic,
+              ],
+              if (firstFrame) DashboardSection.streams,
+            ]);
           } catch (_) {
             /* Ignore malformed frames, keep the stream alive. */
           }
@@ -431,9 +601,8 @@ class DashboardController extends ChangeNotifier {
       );
       _subscriptions.add(subscription);
       await channel.ready.timeout(const Duration(seconds: 12));
-      if (generation == _generation && !retryScheduled) {
-        liveStreams.add(path);
-        _emit();
+      if (current() && !retryScheduled && liveStreams.add(path)) {
+        streamStatusChanged();
       }
     } catch (_) {
       retry();
@@ -525,7 +694,7 @@ class DashboardController extends ChangeNotifier {
     if (generation == _generation) {
       _readProxies(results[0]);
       _readProviders(results[1]);
-      _emit();
+      _emit(const [DashboardSection.proxies]);
     }
   }
 
@@ -533,7 +702,7 @@ class DashboardController extends ChangeNotifier {
     if (!group.selectable || switching.contains(group.name)) return;
     final generation = _generation;
     switching.add(group.name);
-    _emit();
+    _emit(const [DashboardSection.proxies]);
     try {
       await _api!.request(
         'PUT',
@@ -546,10 +715,11 @@ class DashboardController extends ChangeNotifier {
         proxy.delay = null;
         delayErrors.remove(proxy.name);
       }
+      delayOrderRevision++;
     } finally {
       if (generation == _generation) {
         switching.remove(group.name);
-        _emit();
+        _emit(const [DashboardSection.proxies]);
       }
     }
   }
@@ -584,10 +754,26 @@ class DashboardController extends ChangeNotifier {
   Future<void> testGroupDelays() =>
       _runDelayTests(groups.map((g) => g.name), '策略组测速');
 
+  Future<void> retryFailedDelays() => _runDelayTests(
+    _retryTargets,
+    '重试失败或超时节点',
+    allowProviderBatchFallback: _retryAllowsProviderBatch,
+    retrying: true,
+  );
+
+  void cancelDelayTests() {
+    final run = _delayRun;
+    if (run == null || run.cancelled) return;
+    testCancelled = true;
+    run.cancel();
+    _emit(const [DashboardSection.proxies]);
+  }
+
   Future<void> _runDelayTests(
     Iterable<String> names,
     String label, {
     bool allowProviderBatchFallback = false,
+    bool retrying = false,
   }) async {
     if (testing) return;
     if (!connected) throw ApiException('请先连接控制器');
@@ -595,14 +781,26 @@ class DashboardController extends ChangeNotifier {
     if (targets.isEmpty) {
       throw ApiException(providerError ?? '没有可测速的节点，请刷新代理及订阅数据');
     }
-    final generation = _generation;
-    final api = _api;
+    final api = _api!;
+    final run = _delayRun = _DelayTestRun();
+    bool active() => identical(_delayRun, run) && !run.cancelled;
     final providerChecks = <String, Future<Map<String, int?>>>{};
+    if (!retrying) _retryTargets.clear();
+    _retryAllowsProviderBatch = allowProviderBatchFallback;
     testing = true;
+    testCancelled = false;
+    testFirstError = null;
     testLabel = label;
     testTotal = targets.length;
     testCompleted = testFailures = testTimeouts = 0;
-    _emit();
+    void publish() => _emit(const [DashboardSection.proxies]);
+    void scheduleUpdate() {
+      run.updateTimer ??= Timer(const Duration(milliseconds: 80), () {
+        run.updateTimer = null;
+        if (active()) publish();
+      });
+    }
+
     Future<int> providerBatchDelay(ProxyNode node) async {
       final provider = node.providerName!;
       final values = await providerChecks.putIfAbsent(provider, () async {
@@ -610,12 +808,18 @@ class DashboardController extends ChangeNotifier {
         final nodeCount = _providerNodes.values
             .where((n) => n.providerName == provider)
             .length;
-        await api!.request(
+        await api.request(
           'GET',
           '$path/healthcheck',
           timeout: Duration(seconds: 15 + ((nodeCount + 9) ~/ 10) * 5),
+          abortTrigger: run.abort.future,
         );
-        final result = await api.request('GET', path);
+        if (!active()) throw ApiException('测速已取消');
+        final result = await api.request(
+          'GET',
+          path,
+          abortTrigger: run.abort.future,
+        );
         return {
           for (final raw in result['proxies'] as List? ?? [])
             (raw['name'] as String): ProxyNode.fromJson(
@@ -639,9 +843,10 @@ class DashboardController extends ChangeNotifier {
           : '/providers/proxies/${Uri.encodeComponent(node.providerName!)}/${Uri.encodeComponent(node.name)}/healthcheck';
       final url = Uri.tryParse(node.testUrl ?? '');
       try {
-        final result = await api!.request(
+        final result = await api.request(
           'GET',
           path,
+          abortTrigger: run.abort.future,
           query: {
             'url':
                 url != null &&
@@ -657,7 +862,9 @@ class DashboardController extends ChangeNotifier {
         return value.toInt();
       } on ApiException catch (e) {
         if (node.providerName != null && e.statusCode == 404) {
-          if (allowProviderBatchFallback) return providerBatchDelay(node);
+          if (allowProviderBatchFallback && active()) {
+            return providerBatchDelay(node);
+          }
           throw ApiException('当前内核不支持订阅节点单独测速，请使用全部节点测速或升级内核');
         }
         rethrow;
@@ -665,45 +872,64 @@ class DashboardController extends ChangeNotifier {
     }
 
     Future<void> measure(String name) async {
-      if (generation != _generation) return;
       testingNodes.add(name);
-      delayErrors.remove(name);
-      _emit();
       try {
+        if (!canTest(name)) throw ApiException('节点已不在当前配置中');
         final delay = await requestDelay(proxies[name]!);
-        if (generation != _generation) return;
+        if (!active()) return;
         proxies[name]?.delay = delay;
-        if (delay == 0) testTimeouts++;
+        delayErrors.remove(name);
+        if (delay == 0) {
+          testTimeouts++;
+          _retryTargets.add(name);
+        } else {
+          _retryTargets.remove(name);
+        }
       } catch (e) {
-        if (generation != _generation) return;
+        if (!active()) return;
+        _retryTargets.add(name);
         if (e is ApiException &&
             (e.statusCode == 504 || e.message.contains('超时'))) {
           proxies[name]?.delay = 0;
+          delayErrors.remove(name);
           testTimeouts++;
         } else {
           proxies[name]?.delay = null;
           delayErrors[name] = e.toString();
+          testFirstError ??= e.toString();
           testFailures++;
         }
       } finally {
-        if (generation == _generation) {
+        if (active()) {
           testingNodes.remove(name);
           testCompleted++;
-          _emit();
+          scheduleUpdate();
         }
       }
     }
 
-    try {
-      // Bound requests to six at a time, deduplicated across nested groups.
-      for (var i = 0; i < targets.length; i += 6) {
-        if (generation != _generation) return;
-        await Future.wait(targets.skip(i).take(6).map(measure));
+    var next = 0;
+    Future<void> worker() async {
+      while (active() && next < targets.length) {
+        await measure(targets[next++]);
       }
+    }
+
+    try {
+      final workers = List.generate(
+        targets.length.clamp(0, 6),
+        (_) => worker(),
+      );
+      publish();
+      await Future.wait(workers);
     } finally {
-      if (generation == _generation) {
+      run.updateTimer?.cancel();
+      if (identical(_delayRun, run)) {
+        _delayRun = null;
         testing = false;
-        _emit();
+        testingNodes.clear();
+        delayOrderRevision++;
+        publish();
       }
     }
   }
@@ -713,7 +939,7 @@ class DashboardController extends ChangeNotifier {
     await _api!.request('PATCH', '/configs', body: {'mode': value});
     if (generation == _generation) {
       mode = value;
-      _emit();
+      _emit(const [DashboardSection.proxies]);
     }
   }
 
@@ -724,12 +950,12 @@ class DashboardController extends ChangeNotifier {
       final data = await _api!.request('GET', '/rules');
       if (generation == _generation) {
         rules = (data['rules'] as List? ?? []).cast<Map<String, dynamic>>();
-        _emit();
+        _emit(const [DashboardSection.connections]);
       }
     } catch (e) {
       if (generation == _generation) {
         _addLog(LogEntry('warning', '规则读取失败：$e'));
-        _emit();
+        _emit(const [DashboardSection.logs]);
       }
     }
   }
@@ -739,19 +965,33 @@ class DashboardController extends ChangeNotifier {
     await _api!.request('DELETE', '/connections/${Uri.encodeComponent(id)}');
     if (generation == _generation) {
       connections = connections.where((c) => c['id'] != id).toList();
-      _emit();
+      _emit(const [DashboardSection.connections, DashboardSection.overview]);
     }
   }
 
   void clearLogs() {
     logs.clear();
-    _emit();
+    _emit(const [DashboardSection.logs]);
   }
 
   @override
   void dispose() {
     _disposed = true;
     _stop();
+    for (final update in _updates.values) {
+      update.dispose();
+    }
     super.dispose();
+  }
+}
+
+class _DelayTestRun {
+  final abort = Completer<void>();
+  Timer? updateTimer;
+  bool get cancelled => abort.isCompleted;
+
+  void cancel() {
+    updateTimer?.cancel();
+    if (!cancelled) abort.complete();
   }
 }

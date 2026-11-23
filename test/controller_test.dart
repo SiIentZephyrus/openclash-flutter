@@ -11,13 +11,21 @@ void main() {
     () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final ready = Completer<WebSocket>();
+      final logsReady = Completer<WebSocket>();
       final sockets = <WebSocket>[];
+      final openedByPath = <String, List<WebSocket>>{};
       final c = DashboardController();
       final listener = server.listen((request) async {
         if (WebSocketTransformer.isUpgradeRequest(request)) {
           final socket = await WebSocketTransformer.upgrade(request);
           sockets.add(socket);
-          if (request.uri.path == '/connections') ready.complete(socket);
+          openedByPath.putIfAbsent(request.uri.path, () => []).add(socket);
+          if (request.uri.path == '/connections' && !ready.isCompleted) {
+            ready.complete(socket);
+          }
+          if (request.uri.path == '/logs' && !logsReady.isCompleted) {
+            logsReady.complete(socket);
+          }
           return;
         }
         final data = switch (request.uri.path) {
@@ -25,7 +33,11 @@ void main() {
           '/configs' => {'mode': 'rule'},
           '/proxies' => {'proxies': <String, dynamic>{}},
           '/providers/proxies' => {'providers': <String, dynamic>{}},
-          _ => {'rules': []},
+          _ => {
+            'rules': [
+              {'type': 'MATCH'},
+            ],
+          },
         };
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode(data));
@@ -41,6 +53,24 @@ void main() {
       try {
         await c.connect('http://127.0.0.1:${server.port}', '');
         final socket = await ready.future.timeout(const Duration(seconds: 3));
+        final logSocket = await logsReady.future.timeout(
+          const Duration(seconds: 3),
+        );
+        await until(() => c.liveStreams.length == 4 && c.rules.isNotEmpty);
+        final updates = {
+          for (final section in DashboardSection.values) section: 0,
+        };
+        for (final section in DashboardSection.values) {
+          c
+              .updatesFor(section)
+              .addListener(() => updates[section] = updates[section]! + 1);
+        }
+        logSocket.add(jsonEncode({'type': 'info', 'payload': 'scoped update'}));
+        await until(() => updates[DashboardSection.logs] == 1);
+        expect(updates[DashboardSection.session], 0);
+        expect(updates[DashboardSection.proxies], 0);
+        expect(updates[DashboardSection.overview], 0);
+        expect(updates[DashboardSection.connections], 0);
         void snapshot(int bytes) => socket.add(
           jsonEncode({
             'connections': [
@@ -60,6 +90,11 @@ void main() {
         snapshot(11000);
         await until(() => c.trafficFor('outer') != null);
         expect(c.trafficFor('outer')!.download, greaterThan(0));
+        expect(updates[DashboardSection.groupTraffic], 2);
+        expect(updates[DashboardSection.connections], greaterThanOrEqualTo(2));
+        expect(updates[DashboardSection.session], 0);
+        expect(updates[DashboardSection.proxies], 0);
+        expect(updates[DashboardSection.logs], 1);
         expect(
           c.trafficFor('outer')!.download,
           c.trafficFor('inner')!.download,
@@ -78,6 +113,20 @@ void main() {
         expect(c.recentConnections.single['upload'], 1001000);
         await socket.close();
         await until(() => c.trafficFor('outer') == null);
+
+        await c.setBackgrounded(true);
+        expect(c.liveStreams, isEmpty);
+        expect(c.recentConnections.single['id'], 'live');
+        expect(c.logs.single.message, 'scoped update');
+        await c.setBackgrounded(false);
+        await until(() => c.liveStreams.length == 4);
+        expect(
+          openedByPath.values.every((channels) => channels.length == 2),
+          isTrue,
+        );
+        expect(c.connected, isTrue);
+        expect(c.trafficFor('outer'), isNull);
+        expect(c.recentConnections.single['id'], 'live');
         c.disconnect();
         expect(c.trafficFor('inner'), isNull);
         expect(c.recentConnections, isEmpty);

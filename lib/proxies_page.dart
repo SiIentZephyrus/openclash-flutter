@@ -32,6 +32,11 @@ class _ProxiesPageState extends State<ProxiesPage> {
   String? highlightedGroup;
   Timer? highlightTimer;
   DashboardController get c => widget.controller;
+  Map<String, ProxyNode>? _cachedProxies;
+  (String, String)? _cachedFilter;
+  (String, int)? _cachedOrder;
+  final _matchingMembers = <ProxyNode, List<String>>{};
+  final _orderedMembers = <ProxyNode, List<String>>{};
 
   List<ProxyNode> get _displayGroups {
     final groups = {for (final group in c.groups) group.name: group};
@@ -219,35 +224,92 @@ class _ProxiesPageState extends State<ProxiesPage> {
     _returnToTop();
   }
 
+  Future<void> _showGroupDirectory() async {
+    FocusScope.of(context).unfocus();
+    final endpoint = c.address;
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted || c.address != endpoint) return;
+    final target = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) =>
+          _GroupDirectory(groups: _displayGroups, prefs: prefs),
+    );
+    if (mounted && target != null && c.address == endpoint) {
+      await _jumpToGroup(target);
+    }
+  }
+
   void _expandAll() => setState(() {
     collapsed.clear();
     opened.addAll(_displayGroups.map((g) => g.name));
   });
-  bool _matchesGroup(ProxyNode g) =>
-      g.name.toLowerCase().contains(query.trim().toLowerCase());
-  bool _matchesNode(String name) =>
-      name.toLowerCase().contains(query.trim().toLowerCase());
+  bool _matchesGroup(ProxyNode g) => _matchesNode(g.name);
+  bool _matchesNode(String name) => name.toLowerCase().contains(query);
+  List<String> _membersMatching(ProxyNode group) => _matchingMembers
+      .putIfAbsent(group, () => group.members.where(_matchesNode).toList());
   bool _visibleGroup(ProxyNode group) =>
-      query.trim().isEmpty ||
+      query.isEmpty ||
       switch (searchScope) {
         'groups' => _matchesGroup(group),
-        'nodes' => group.members.any(_matchesNode),
-        _ => _matchesGroup(group) || group.members.any(_matchesNode),
+        'nodes' => _membersMatching(group).isNotEmpty,
+        _ => _matchesGroup(group) || _membersMatching(group).isNotEmpty,
       };
+
+  void _prepareMemberCache() {
+    final filter = (query, searchScope);
+    if (!identical(_cachedProxies, c.proxies) || _cachedFilter != filter) {
+      _cachedProxies = c.proxies;
+      _cachedFilter = filter;
+      _matchingMembers.clear();
+      _orderedMembers.clear();
+    }
+    final order = (sort, sort == 'delay' ? c.delayOrderRevision : 0);
+    if (_cachedOrder != order) {
+      _cachedOrder = order;
+      _orderedMembers.clear();
+    }
+  }
+
+  List<String> _membersFor(ProxyNode group) {
+    final showAll =
+        query.isEmpty ||
+        searchScope == 'groups' ||
+        (searchScope == 'all' && _matchesGroup(group));
+    final names = showAll ? group.members : _membersMatching(group);
+    if (sort == 'default') return names;
+    return _orderedMembers.putIfAbsent(group, () {
+      final ordered = names.toList();
+      if (sort == 'name') return ordered..sort();
+      final delays = {for (final name in ordered) name: c.delayFor(name) ?? 0};
+      ordered.sort((a, b) {
+        final first = delays[a]!;
+        final second = delays[b]!;
+        if (first <= 0) return second <= 0 ? 0 : 1;
+        if (second <= 0) return -1;
+        return first.compareTo(second);
+      });
+      return ordered;
+    });
+  }
 
   Future<void> _test(
     Future<void> Function() action,
   ) => runAction(context, () async {
+    if (c.testing) return;
     await action();
     if (mounted && c.testTotal > 0 && !c.testing) {
       final succeeded = c.testCompleted - c.testFailures - c.testTimeouts;
       showAppNotice(
         context,
         AppNotice(
-          title: '测速完成',
+          title: c.testCancelled ? '测速已取消' : '测速完成',
           message:
-              '已测试 ${c.testCompleted} 个节点${c.testFailures > 0 && c.delayErrors.isNotEmpty ? ' · ${c.delayErrors.values.first}' : ''}',
-          tone: succeeded == 0
+              '已测试 ${c.testCompleted} 个节点${c.testFirstError == null ? '' : ' · ${c.testFirstError}'}',
+          tone: c.testCancelled
+              ? NoticeTone.warning
+              : succeeded == 0
               ? NoticeTone.error
               : c.testFailures + c.testTimeouts > 0
               ? NoticeTone.warning
@@ -270,7 +332,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
       backgroundColor: canvas,
       builder: (sheetContext) => SafeArea(
         child: ListenableBuilder(
-          listenable: c,
+          listenable: c.updatesFor(DashboardSection.proxies),
           builder: (context, _) => SingleChildScrollView(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
@@ -316,6 +378,15 @@ class _ProxiesPageState extends State<ProxiesPage> {
                       unawaited(_test(c.testGroupDelays));
                     },
                   ),
+                  if (c.canRetryDelays)
+                    ListTile(
+                      leading: const Icon(Icons.replay_rounded, color: accent),
+                      title: const Text('重试失败或超时节点'),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        unawaited(_test(c.retryFailedDelays));
+                      },
+                    ),
                   const Divider(),
                   ListTile(
                     leading: const Icon(Icons.unfold_less_rounded),
@@ -392,6 +463,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
 
   @override
   Widget build(BuildContext context) {
+    _prepareMemberCache();
     final groups = _displayGroups;
     final visible = groups.where(_visibleGroup).toList();
     final nodeExtent = _nodeExtent(context);
@@ -414,11 +486,30 @@ class _ProxiesPageState extends State<ProxiesPage> {
                       ),
                     ),
                   ),
-                  Text(
-                    query.trim().isEmpty
-                        ? '${groups.length} 个策略组'
-                        : '${visible.length} / ${groups.length} 个策略组',
-                    style: const TextStyle(fontSize: 10, color: muted),
+                  Tooltip(
+                    message: '策略组目录',
+                    child: TextButton(
+                      onPressed: () => runAction(context, _showGroupDirectory),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        minimumSize: const Size(0, 44),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            query.isEmpty
+                                ? '${groups.length} 个策略组'
+                                : '${visible.length} / ${groups.length} 个策略组',
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                          const Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            size: 14,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                   PopupMenuButton<String>(
                     tooltip: '页面布局',
@@ -459,7 +550,8 @@ class _ProxiesPageState extends State<ProxiesPage> {
               TextField(
                 key: const ValueKey('proxy-search'),
                 controller: search,
-                onChanged: (value) => setState(() => query = value),
+                onChanged: (value) =>
+                    setState(() => query = value.trim().toLowerCase()),
                 decoration: InputDecoration(
                   hintText: switch (searchScope) {
                     'groups' => '搜索策略组名称',
@@ -561,9 +653,10 @@ class _ProxiesPageState extends State<ProxiesPage> {
               ),
               if (c.testing) ...[
                 TaskProgressNotice(
-                  title: c.testLabel,
+                  title: c.testCancelled ? '正在取消测速…' : c.testLabel,
                   completed: c.testCompleted,
                   total: c.testTotal,
+                  onCancel: c.testCancelled ? null : c.cancelDelayTests,
                 ),
                 const SizedBox(height: 6),
               ],
@@ -756,26 +849,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
         (group.type != 'Selector' &&
             !opened.contains(group.name) &&
             query.trim().isEmpty);
-    // Do not filter/sort collapsed groups, or copy the members when the default
-    // order and an empty query can use the original list directly.
-    var names = const <String>[];
-    if (!isCollapsed) {
-      final showAll =
-          query.trim().isEmpty ||
-          searchScope == 'groups' ||
-          (searchScope == 'all' && _matchesGroup(group));
-      names = showAll
-          ? group.members
-          : group.members.where(_matchesNode).toList();
-    }
-    final sorted = sort == 'default' ? names : names.toList();
-    if (sort == 'name') sorted.sort();
-    if (sort == 'delay') {
-      final delays = {for (final name in sorted) name: c.delayFor(name)};
-      int value(String name) =>
-          (delays[name] ?? 0) <= 0 ? 999999 : delays[name]!;
-      sorted.sort((a, b) => value(a).compareTo(value(b)));
-    }
+    final sorted = isCollapsed ? const <String>[] : _membersFor(group);
     final header = InkWell(
       key: ValueKey('proxy-group-header-${group.name}'),
       borderRadius: BorderRadius.circular(20),
@@ -853,10 +927,13 @@ class _ProxiesPageState extends State<ProxiesPage> {
             const SizedBox(height: 9),
             Padding(
               padding: const EdgeInsets.only(left: 29),
-              child: _GroupTrafficStats(
-                key: ValueKey('group-traffic-${group.name}'),
-                name: group.name,
-                rate: c.trafficFor(group.name),
+              child: ListenableBuilder(
+                listenable: c.updatesFor(DashboardSection.groupTraffic),
+                builder: (context, _) => _GroupTrafficStats(
+                  key: ValueKey('group-traffic-${group.name}'),
+                  name: group.name,
+                  rate: c.trafficFor(group.name),
+                ),
               ),
             ),
           ],
@@ -945,6 +1022,126 @@ class _ProxiesPageState extends State<ProxiesPage> {
     onViewGroup: () => unawaited(runAction(context, () => _jumpToGroup(name))),
     groupName: group.name,
   );
+}
+
+class _GroupDirectory extends StatefulWidget {
+  const _GroupDirectory({required this.groups, required this.prefs});
+  final List<ProxyNode> groups;
+  final SharedPreferences prefs;
+
+  @override
+  State<_GroupDirectory> createState() => _GroupDirectoryState();
+}
+
+class _GroupDirectoryState extends State<_GroupDirectory> {
+  static const _favoritesKey = 'proxyGroupFavorites';
+  late final favorites = (widget.prefs.getStringList(_favoritesKey) ?? [])
+      .toSet();
+  String query = '';
+  bool saving = false;
+
+  Future<void> _toggleFavorite(String name) async {
+    if (saving) return;
+    final next = {...favorites};
+    if (!next.remove(name)) next.add(name);
+    setState(() => saving = true);
+    try {
+      if (!await widget.prefs.setStringList(_favoritesKey, next.toList())) {
+        throw StateError('无法保存收藏，请重试');
+      }
+      if (!mounted) return;
+      setState(() {
+        favorites
+          ..clear()
+          ..addAll(next);
+      });
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = widget.groups
+        .where((group) => group.name.toLowerCase().contains(query))
+        .toList();
+    final ordered = [
+      ...matches.where((group) => favorites.contains(group.name)),
+      ...matches.where((group) => !favorites.contains(group.name)),
+    ];
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: FractionallySizedBox(
+        heightFactor: .8,
+        child: SafeArea(
+          child: Column(
+            children: [
+              const Text(
+                '策略组目录',
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: TextField(
+                  key: const ValueKey('group-directory-search'),
+                  onChanged: (value) =>
+                      setState(() => query = value.trim().toLowerCase()),
+                  decoration: const InputDecoration(
+                    hintText: '搜索策略组',
+                    prefixIcon: Icon(Icons.search_rounded, size: 20),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: ordered.isEmpty
+                    ? Center(
+                        child: Text(query.isEmpty ? '暂无可用策略组' : '没有匹配的策略组'),
+                      )
+                    : ListView.builder(
+                        itemCount: ordered.length,
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        itemBuilder: (context, index) {
+                          final group = ordered[index];
+                          final starred = favorites.contains(group.name);
+                          return ListTile(
+                            key: ValueKey('directory-group-${group.name}'),
+                            leading: const Icon(
+                              Icons.layers_outlined,
+                              color: accent,
+                            ),
+                            title: Text(
+                              group.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () => Navigator.pop(context, group.name),
+                            trailing: IconButton(
+                              tooltip:
+                                  '${starred ? '取消收藏' : '收藏'} ${group.name}',
+                              icon: Icon(
+                                starred
+                                    ? Icons.star_rounded
+                                    : Icons.star_border_rounded,
+                                color: accent,
+                              ),
+                              onPressed: saving
+                                  ? null
+                                  : () => runAction(
+                                      context,
+                                      () => _toggleFavorite(group.name),
+                                    ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _GroupTrafficStats extends StatelessWidget {

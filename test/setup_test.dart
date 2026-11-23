@@ -71,6 +71,64 @@ void main() {
     await cleanup(tester, c);
   });
 
+  testWidgets(
+    'offline retries pause in the background and resume immediately',
+    (tester) async {
+      final store = MemoryControllerStore()
+        ..profile = ControllerProfile('http://offline', 'keep-key');
+      final api = ApiRecorder();
+      final c = await mount(tester, store, api);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump(const Duration(seconds: 12));
+      expect(api.credentials.length, 1);
+      api.unavailableHosts.clear();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(api.credentials.length, 2);
+      expect(c.connected, isTrue);
+      await cleanup(tester, c);
+    },
+  );
+
+  testWidgets('settings can add, switch and delete named controllers', (
+    tester,
+  ) async {
+    final store = MemoryControllerStore()
+      ..profile = ControllerProfile('http://home', 'home-key', name: '家里');
+    final c = await mount(tester, store, ApiRecorder());
+    await tester.tap(find.text('设置').last);
+    await tester.pumpAndSettle();
+    Future<void> openControllers() async {
+      await tester.tap(find.text('管理控制器'));
+      await tester.pumpAndSettle();
+    }
+
+    await openControllers();
+    await tester.tap(find.text('添加控制器'));
+    await tester.pumpAndSettle();
+    await enter(tester, 'http://work', 'work-key');
+    await tester.enterText(
+      find.byKey(const ValueKey('controller-name')),
+      '办公室',
+    );
+    await tester.tap(find.text('保存并连接'));
+    await tester.pumpAndSettle();
+    expect(c.controllerName, '办公室');
+    await openControllers();
+    await tester.tap(find.text('家里'));
+    await tester.pumpAndSettle();
+    expect(c.controllerName, '家里');
+    expect(c.address, 'http://home');
+    await openControllers();
+    await tester.tap(find.byTooltip('删除 办公室'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    expect(c.savedControllers.single.name, '家里');
+    expect(tester.takeException(), isNull);
+    await cleanup(tester, c);
+  });
+
   testWidgets('first launch cannot enter dashboard without saving controller', (
     tester,
   ) async {

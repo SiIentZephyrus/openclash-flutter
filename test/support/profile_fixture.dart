@@ -7,23 +7,26 @@ import 'package:openclash_client/clash_api.dart';
 import 'package:openclash_client/controller_store.dart';
 
 class MemoryControllerStore extends ControllerStore {
-  ControllerProfile? profile;
+  ControllerProfiles? profiles;
+  ControllerProfile? get profile => profiles?.active;
+  set profile(ControllerProfile? value) =>
+      profiles = value == null ? null : ControllerProfiles.single(value);
   String? hint;
   int reads = 0, writes = 0;
   bool failRead = false, failWrite = false;
   Completer<void>? pendingWrite;
   @override
-  Future<ControllerProfile?> read() async {
+  Future<ControllerProfiles?> readProfiles() async {
     reads++;
     if (failRead) throw StateError('storage unavailable');
-    return profile;
+    return profiles;
   }
 
   @override
-  Future<void> save(ControllerProfile value) async {
+  Future<void> saveProfiles(ControllerProfiles value) async {
     if (pendingWrite != null) await pendingWrite!.future;
     if (failWrite) throw StateError('disk write failed');
-    profile = value;
+    profiles = value;
     writes++;
   }
 
@@ -34,6 +37,7 @@ class MemoryControllerStore extends ControllerStore {
 class ApiRecorder {
   final credentials = <(String, String)>[];
   final requests = <http.Request>[];
+  final unavailableHosts = {'offline'};
   ClashApi create(String address, String secret) {
     credentials.add((address, secret));
     return _NoSocketApi(
@@ -42,7 +46,9 @@ class ApiRecorder {
       client: MockClient((request) async {
         requests.add(request);
         if (secret == 'wrong') return http.Response('{}', 401);
-        if (request.url.host == 'offline') return http.Response('{}', 503);
+        if (unavailableHosts.contains(request.url.host)) {
+          return http.Response('{}', 503);
+        }
         final data = switch (request.url.path) {
           '/version' => {'version': 'fixture-core'},
           '/configs' => {'mode': 'rule'},

@@ -118,6 +118,52 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
+
+  testWidgets(
+    'strategy directory searches, persists favorites and jumps to a group',
+    (tester) async {
+      final c = await mount(tester, const Size(360, 740));
+      await tester.tap(find.text('代理').last);
+      await tester.pumpAndSettle();
+      Future<void> openDirectory() async {
+        await tester.tap(find.byTooltip('策略组目录'));
+        await tester.pumpAndSettle();
+      }
+
+      await openDirectory();
+      await tester.enterText(
+        find.byKey(const ValueKey('group-directory-search')),
+        ' 全球 ',
+      );
+      await tester.pumpAndSettle();
+      final target = find.byKey(const ValueKey('directory-group-全球直连'));
+      expect(target, findsOneWidget);
+      expect(find.byKey(const ValueKey('directory-group-节点选择')), findsNothing);
+      await tester.tap(find.byTooltip('收藏 全球直连'));
+      await tester.pumpAndSettle();
+      await tester.tap(target);
+      await tester.pumpAndSettle();
+      final header = find.byKey(const ValueKey('proxy-group-header-全球直连'));
+      final list = find.byKey(const ValueKey('proxy-list'));
+      expect(
+        tester.getTopLeft(header).dy,
+        closeTo(tester.getTopLeft(list).dy + 4, 2),
+      );
+      await openDirectory();
+      expect(find.byTooltip('取消收藏 全球直连'), findsOneWidget);
+      expect(
+        tester.getTopLeft(target).dy,
+        lessThan(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('directory-group-节点选择')))
+              .dy,
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
   testWidgets('small phone and wide layout render all pages without overflow', (
     tester,
   ) async {
