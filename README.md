@@ -19,7 +19,7 @@
 
 ## 安卓安装和连接
 
-最新安装包从 [GitHub Releases](https://github.com/SiIentZephyrus/openclash-flutter/releases) 下载，本地构建输出到 `dist/`。按 CPU 架构分别提供 `OpenClash-1.0.8-arm64-v8a.apk`（64 位 ARM）、`OpenClash-1.0.8-armeabi-v7a.apk`（32 位 ARM）和 `OpenClash-1.0.8-x86_64.apk`（64 位 x86）。只需安装与设备匹配的一个 APK，无需同时安装。分包减少单个安装包中不需要的原生库。
+最新安装包从 [GitHub Releases](https://github.com/SiIentZephyrus/openclash-flutter/releases) 下载，本地构建输出到 `dist/`。按 CPU 架构分别提供 `OpenClash-1.0.9-arm64-v8a.apk`（64 位 ARM）、`OpenClash-1.0.9-armeabi-v7a.apk`（32 位 ARM）和 `OpenClash-1.0.9-x86_64.apk`（64 位 x86）。只需安装与设备匹配的一个 APK，无需同时安装。分包减少单个安装包中不需要的原生库。
 
 无本地配置时只显示控制器配置页，不能进入面板；App 不包含演示数据。
 
