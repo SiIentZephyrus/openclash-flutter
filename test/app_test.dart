@@ -87,7 +87,7 @@ void main() {
     final c = await mount(tester, const Size(360, 740));
     await tester.tap(find.text('代理').last);
     await tester.pumpAndSettle();
-    final list = tester.widget<ListView>(
+    final list = tester.widget<ScrollView>(
       find.byKey(const ValueKey('proxy-list')),
     );
     list.controller!.jumpTo(550);
@@ -142,7 +142,7 @@ void main() {
       await tester.pumpAndSettle();
       final field = find.byKey(const ValueKey('proxy-search'));
       final initial = tester.getTopLeft(field);
-      final list = tester.widget<ListView>(
+      final list = tester.widget<ScrollView>(
         find.byKey(const ValueKey('proxy-list')),
       );
       list.controller!.jumpTo(650);
@@ -297,11 +297,11 @@ void main() {
         expect(c.selectionCalls, 1);
         expect(
           tester
-              .widget<Wrap>(
+              .widget<SliverGrid>(
                 find.byKey(ValueKey('proxy-layout-${option.value}-自动选择')),
               )
-              .children
-              .length,
+              .delegate
+              .estimatedChildCount,
           c.proxies['自动选择']!.members.length,
         );
         await tester.pumpWidget(const SizedBox());
@@ -354,13 +354,23 @@ void main() {
           ValueKey('proxy-layout-${option.value}-自动选择'),
         );
         expect(
-          tester.widget<Wrap>(members).children.length,
+          tester.widget<SliverGrid>(members).delegate.estimatedChildCount,
           c.proxies['自动选择']!.members.length,
         );
-        expect(
-          find.descendant(of: members, matching: find.text('美国 · San Jose')),
-          findsOneWidget,
+        // Nodes below the viewport are created as the user scrolls.
+        final lastNode = find.descendant(
+          of: members,
+          matching: find.text('美国 · San Jose'),
         );
+        await tester.scrollUntilVisible(
+          lastNode,
+          120,
+          scrollable: find.descendant(
+            of: find.byKey(const ValueKey('proxy-list')),
+            matching: find.byType(Scrollable),
+          ),
+        );
+        expect(lastNode, findsOneWidget);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
         c.dispose();
@@ -393,7 +403,7 @@ void main() {
       expect(find.byKey(const ValueKey('proxy-group-远处的隐藏组')), findsNothing);
       await tester.tap(find.byKey(const ValueKey('view-group-节点选择-远处的隐藏组')));
       await tester.pumpAndSettle();
-      final list = tester.widget<ListView>(
+      final list = tester.widget<ScrollView>(
         find.byKey(const ValueKey('proxy-list')),
       );
       expect(list.controller!.offset, greaterThan(4000));
@@ -408,11 +418,11 @@ void main() {
       );
       expect(
         tester
-            .widget<Wrap>(
+            .widget<SliverGrid>(
               find.byKey(const ValueKey('proxy-layout-card-远处的隐藏组')),
             )
-            .children
-            .length,
+            .delegate
+            .estimatedChildCount,
         names.length + 1,
       );
       await tester.tap(find.byKey(const ValueKey('view-group-远处的隐藏组-节点选择')));

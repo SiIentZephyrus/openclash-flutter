@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,7 +27,6 @@ class _ProxiesPageState extends State<ProxiesPage> {
   final Set<String> collapsed = {}, opened = {};
   final Set<String> revealed = {};
   final Map<String, GlobalKey> groupHeaders = {};
-  final Map<String, GlobalKey> groupPanels = {};
   double bottomPadding = 96;
   int jumpGeneration = 0;
   String? highlightedGroup;
@@ -101,7 +101,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
       opened.add(name);
       highlightedGroup = null;
     });
-    // Clear filters and lay out the expanded target before locating its index.
+    // Clear filters and lay out the expanded target before reading its offset.
     await _afterLayout();
     if (!mounted || !active()) return;
     // Keyboard dismissal changes the viewport on Android. Finish it before
@@ -110,56 +110,10 @@ class _ProxiesPageState extends State<ProxiesPage> {
       await _afterLayout();
       if (!mounted || !active()) return;
     }
-    final index = _displayGroups.indexWhere((g) => g.name == name);
-    if (index < 0) return;
-    RenderBox? headerBox() {
-      return _boxFor(groupHeaders[name]);
-    }
-
-    // Seek across measured group boundaries. Do not wait on an index-based
-    // animation while filtering is replacing the list's scroll geometry.
-    for (
-      var attempt = 0;
-      attempt < _displayGroups.length * 2 + 8 && headerBox() == null;
-      attempt++
-    ) {
-      final groups = _displayGroups;
-      RenderBox? nearest;
-      var nearestIndex = -1;
-      for (var i = 0; i < groups.length; i++) {
-        final box = _boxFor(groupPanels[groups[i].name]);
-        if (box != null &&
-            (nearestIndex < 0 ||
-                (i - index).abs() < (nearestIndex - index).abs())) {
-          nearest = box;
-          nearestIndex = i;
-        }
-      }
-      if (nearest != null) {
-        final forward = index > nearestIndex;
-        final viewport = RenderAbstractViewport.of(nearest);
-        final edge = viewport
-            .getOffsetToReveal(nearest, forward ? 1 : 0)
-            .offset;
-        final distance = scroll.position.viewportDimension;
-        final next = forward
-            ? (edge + distance + 1).clamp(scroll.offset + 1, double.infinity)
-            : (edge - distance * .8).clamp(
-                double.negativeInfinity,
-                scroll.offset - 1,
-              );
-        scroll.jumpTo(
-          next
-              .clamp(
-                scroll.position.minScrollExtent,
-                scroll.position.maxScrollExtent,
-              )
-              .toDouble(),
-        );
-      }
-      await _afterLayout();
-      if (!active()) return;
-    }
+    // Every group header participates in the sliver layout, while its grid
+    // only builds visible nodes. The viewport can reveal even a distant header
+    // directly, without visiting the groups in between.
+    RenderBox? headerBox() => _boxFor(groupHeaders[name]);
     var aligned = false;
     var stableFrames = 0;
     for (var attempt = 0; attempt < 6; attempt++) {
@@ -193,12 +147,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
         continue;
       }
       stableFrames = 0;
-      await scroll.animateTo(
-        offset,
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-      );
-      if (!active()) return;
+      scroll.jumpTo(offset);
       await _afterLayout();
       if (!active()) return;
     }
@@ -445,6 +394,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
   Widget build(BuildContext context) {
     final groups = _displayGroups;
     final visible = groups.where(_visibleGroup).toList();
+    final nodeExtent = _nodeExtent(context);
     return Column(
       children: [
         // Search and its scope stay outside the scrollable proxy list.
@@ -626,85 +576,117 @@ class _ProxiesPageState extends State<ProxiesPage> {
               Positioned.fill(
                 child: RefreshIndicator(
                   onRefresh: () => runAction(context, c.refresh),
-                  child: ListView(
+                  child: CustomScrollView(
                     key: const ValueKey('proxy-list'),
                     controller: scroll,
                     keyboardDismissBehavior:
                         ScrollViewKeyboardDismissBehavior.onDrag,
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: EdgeInsets.fromLTRB(20, 4, 20, bottomPadding),
-                    children: [
-                      SizedBox(
-                        width: double.infinity,
-                        child: SegmentedButton<String>(
-                          segments: const [
-                            ButtonSegment(
-                              value: 'rule',
-                              label: Text('规则', style: TextStyle(fontSize: 12)),
-                              icon: Icon(Icons.alt_route_rounded, size: 15),
-                            ),
-                            ButtonSegment(
-                              value: 'global',
-                              label: Text('全局', style: TextStyle(fontSize: 12)),
-                              icon: Icon(Icons.public_rounded, size: 15),
-                            ),
-                            ButtonSegment(
-                              value: 'direct',
-                              label: Text('直连', style: TextStyle(fontSize: 12)),
-                              icon: Icon(Icons.east_rounded, size: 15),
-                            ),
-                          ],
-                          selected: {c.mode},
-                          showSelectedIcon: false,
-                          onSelectionChanged: c.connecting
-                              ? null
-                              : (value) => runAction(
-                                  context,
-                                  () => c.changeMode(value.first),
+                    slivers: [
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                        sliver: SliverToBoxAdapter(
+                          child: Column(
+                            children: [
+                              SizedBox(
+                                width: double.infinity,
+                                child: SegmentedButton<String>(
+                                  segments: const [
+                                    ButtonSegment(
+                                      value: 'rule',
+                                      label: Text(
+                                        '规则',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                      icon: Icon(
+                                        Icons.alt_route_rounded,
+                                        size: 15,
+                                      ),
+                                    ),
+                                    ButtonSegment(
+                                      value: 'global',
+                                      label: Text(
+                                        '全局',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                      icon: Icon(
+                                        Icons.public_rounded,
+                                        size: 15,
+                                      ),
+                                    ),
+                                    ButtonSegment(
+                                      value: 'direct',
+                                      label: Text(
+                                        '直连',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                      icon: Icon(Icons.east_rounded, size: 15),
+                                    ),
+                                  ],
+                                  selected: {c.mode},
+                                  showSelectedIcon: false,
+                                  onSelectionChanged: c.connecting
+                                      ? null
+                                      : (value) => runAction(
+                                          context,
+                                          () => c.changeMode(value.first),
+                                        ),
+                                  style: SegmentedButton.styleFrom(
+                                    side: const BorderSide(color: stroke),
+                                    selectedBackgroundColor: const Color(
+                                      0xFFDFF0EA,
+                                    ),
+                                    selectedForegroundColor: accent,
+                                    backgroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                    ),
+                                  ),
                                 ),
-                          style: SegmentedButton.styleFrom(
-                            side: const BorderSide(color: stroke),
-                            selectedBackgroundColor: const Color(0xFFDFF0EA),
-                            selectedForegroundColor: accent,
-                            backgroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
+                              const SizedBox(height: 14),
+                              if (!c.connected)
+                                Panel(
+                                  child: EmptyState(
+                                    c.connecting ? '正在连接…' : '控制器未连接',
+                                    c.error ?? '前往设置添加路由器',
+                                    icon: Icons.router_outlined,
+                                  ),
+                                ),
+                              if (c.providerError != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: AppNoticeCard(
+                                    notice: AppNotice(
+                                      title: '订阅节点暂不可用',
+                                      message: c.providerError!,
+                                      tone: NoticeTone.warning,
+                                    ),
+                                    floating: false,
+                                  ),
+                                ),
+                              if (groups.isEmpty && c.connected)
+                                const Panel(
+                                  child: EmptyState(
+                                    '没有可用策略组',
+                                    '请检查 OpenClash 配置中的 proxy-groups',
+                                  ),
+                                ),
+                              if (query.trim().isNotEmpty && visible.isEmpty)
+                                EmptyState(
+                                  searchScope == 'groups'
+                                      ? '没有匹配的策略组'
+                                      : '没有匹配的节点',
+                                  '试试其他名称或地区',
+                                ),
+                            ],
                           ),
                         ),
                       ),
-                      const SizedBox(height: 14),
-                      if (!c.connected)
-                        Panel(
-                          child: EmptyState(
-                            c.connecting ? '正在连接…' : '控制器未连接',
-                            c.error ?? '前往设置添加路由器',
-                            icon: Icons.router_outlined,
-                          ),
-                        ),
-                      if (c.providerError != null)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: AppNoticeCard(
-                            notice: AppNotice(
-                              title: '订阅节点暂不可用',
-                              message: c.providerError!,
-                              tone: NoticeTone.warning,
-                            ),
-                            floating: false,
-                          ),
-                        ),
-                      if (groups.isEmpty && c.connected)
-                        const Panel(
-                          child: EmptyState(
-                            '没有可用策略组',
-                            '请检查 OpenClash 配置中的 proxy-groups',
-                          ),
-                        ),
-                      for (final group in visible) _group(group),
-                      if (query.trim().isNotEmpty && visible.isEmpty)
-                        EmptyState(
-                          searchScope == 'groups' ? '没有匹配的策略组' : '没有匹配的节点',
-                          '试试其他名称或地区',
-                        ),
+                      for (final group in visible) _group(group, nodeExtent),
+                      SliverToBoxAdapter(
+                        child: SizedBox(height: bottomPadding),
+                      ),
                     ],
                   ),
                 ),
@@ -729,189 +711,209 @@ class _ProxiesPageState extends State<ProxiesPage> {
     );
   }
 
-  Widget _group(ProxyNode group) {
-    final names = group.members
-        .where(
-          (name) =>
-              searchScope == 'groups' ||
-              _matchesNode(name) ||
-              (searchScope == 'all' && _matchesGroup(group)),
-        )
-        .toList();
-    if (sort == 'name') names.sort();
-    if (sort == 'delay') {
-      int value(String name) =>
-          (c.delayFor(name) ?? 0) <= 0 ? 999999 : c.delayFor(name)!;
-      names.sort((a, b) => value(a).compareTo(value(b)));
+  // Match the tile's single-line text metrics, including accessibility text
+  // scaling. A fixed row extent lets SliverGrid know the exact scroll geometry
+  // without building all preceding nodes.
+  double _nodeExtent(BuildContext context) {
+    double line(double size, [FontWeight? weight]) {
+      final painter = TextPainter(
+        text: TextSpan(
+          text: '国Ag',
+          style: DefaultTextStyle.of(
+            context,
+          ).style.merge(TextStyle(fontSize: size, fontWeight: weight)),
+        ),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      final height = painter.height;
+      painter.dispose();
+      return height;
     }
+
+    final nameHeight = line(layout == 'list' ? 12 : 11, FontWeight.w700);
+    final badgeHeight = line(10, FontWeight.w600);
+    final typeHeight = line(9);
+    final contentHeight = switch (layout) {
+      'list' =>
+        24 + math.max(36, math.max(nameHeight + 5 + typeHeight, badgeHeight)),
+      'compact' =>
+        18 + math.max(16, nameHeight) + 4 + math.max(32, badgeHeight),
+      _ =>
+        24 +
+            36 +
+            10 +
+            nameHeight +
+            8 +
+            math.max(14, math.max(typeHeight, badgeHeight)),
+    };
+    return contentHeight + 2;
+  }
+
+  Widget _group(ProxyNode group, double nodeExtent) {
     final isCollapsed =
         collapsed.contains(group.name) ||
         (group.type != 'Selector' &&
             !opened.contains(group.name) &&
             query.trim().isEmpty);
-    return Padding(
-      key: groupPanels.putIfAbsent(group.name, GlobalKey.new),
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Panel(
-        key: ValueKey('proxy-group-${group.name}'),
-        color: highlightedGroup == group.name ? const Color(0xFFF1FAF6) : null,
-        padding: EdgeInsets.zero,
+    // Do not filter/sort collapsed groups, or copy the members when the default
+    // order and an empty query can use the original list directly.
+    var names = const <String>[];
+    if (!isCollapsed) {
+      final showAll =
+          query.trim().isEmpty ||
+          searchScope == 'groups' ||
+          (searchScope == 'all' && _matchesGroup(group));
+      names = showAll
+          ? group.members
+          : group.members.where(_matchesNode).toList();
+    }
+    final sorted = sort == 'default' ? names : names.toList();
+    if (sort == 'name') sorted.sort();
+    if (sort == 'delay') {
+      final delays = {for (final name in sorted) name: c.delayFor(name)};
+      int value(String name) =>
+          (delays[name] ?? 0) <= 0 ? 999999 : delays[name]!;
+      sorted.sort((a, b) => value(a).compareTo(value(b)));
+    }
+    final header = InkWell(
+      key: ValueKey('proxy-group-header-${group.name}'),
+      borderRadius: BorderRadius.circular(20),
+      onTap: () => setState(() {
+        if (isCollapsed) {
+          collapsed.remove(group.name);
+          opened.add(group.name);
+        } else {
+          collapsed.add(group.name);
+          opened.remove(group.name);
+        }
+      }),
+      child: Padding(
+        key: groupHeaders.putIfAbsent(group.name, GlobalKey.new),
+        padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            InkWell(
-              key: ValueKey('proxy-group-header-${group.name}'),
-              borderRadius: BorderRadius.circular(20),
-              onTap: () => setState(() {
-                if (isCollapsed) {
-                  collapsed.remove(group.name);
-                  opened.add(group.name);
-                } else {
-                  collapsed.add(group.name);
-                  opened.remove(group.name);
-                }
-              }),
-              child: Padding(
-                key: groupHeaders.putIfAbsent(group.name, GlobalKey.new),
-                padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          group.type == 'Selector'
-                              ? Icons.layers_outlined
-                              : Icons.auto_awesome_rounded,
-                          color: accent,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 9),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                group.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 5),
-                              Text(
-                                '${group.members.length} 个 · ${group.now.isEmpty ? group.type : group.now}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 9,
-                                  color: muted,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        _DelayBadge(
-                          controller: c,
-                          name: group.name,
-                          group: true,
-                        ),
-                        IconButton(
-                          tooltip: '测试 ${group.name} 延迟',
-                          onPressed: c.testing
-                              ? null
-                              : () => _test(() => c.testDelay(group)),
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(
-                            Icons.speed_rounded,
-                            color: accent,
-                            size: 19,
-                          ),
-                        ),
-                        Icon(
-                          isCollapsed
-                              ? Icons.keyboard_arrow_down_rounded
-                              : Icons.keyboard_arrow_up_rounded,
-                          color: muted,
-                          size: 18,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 9),
-                    Padding(
-                      padding: const EdgeInsets.only(left: 29),
-                      child: _GroupTrafficStats(
-                        key: ValueKey('group-traffic-${group.name}'),
-                        name: group.name,
-                        rate: c.trafficFor(group.name),
-                      ),
-                    ),
-                  ],
+            Row(
+              children: [
+                Icon(
+                  group.type == 'Selector'
+                      ? Icons.layers_outlined
+                      : Icons.auto_awesome_rounded,
+                  color: accent,
+                  size: 20,
                 ),
-              ),
-            ),
-            if (!isCollapsed) ...[
-              const Divider(height: 1, color: stroke),
-              if (!group.selectable)
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(12, 9, 12, 0),
-                  child: Text(
-                    '此策略组由内核自动分配节点',
-                    style: TextStyle(color: muted, fontSize: 10),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        group.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        '${group.members.length} 个 · ${group.now.isEmpty ? group.type : group.now}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 9, color: muted),
+                      ),
+                    ],
                   ),
                 ),
-              Padding(
+                const SizedBox(width: 5),
+                _DelayBadge(controller: c, name: group.name, group: true),
+                IconButton(
+                  tooltip: '测试 ${group.name} 延迟',
+                  onPressed: c.testing
+                      ? null
+                      : () => _test(() => c.testDelay(group)),
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(
+                    Icons.speed_rounded,
+                    color: accent,
+                    size: 19,
+                  ),
+                ),
+                Icon(
+                  isCollapsed
+                      ? Icons.keyboard_arrow_down_rounded
+                      : Icons.keyboard_arrow_up_rounded,
+                  color: muted,
+                  size: 18,
+                ),
+              ],
+            ),
+            const SizedBox(height: 9),
+            Padding(
+              padding: const EdgeInsets.only(left: 29),
+              child: _GroupTrafficStats(
+                key: ValueKey('group-traffic-${group.name}'),
+                name: group.name,
+                rate: c.trafficFor(group.name),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return SliverPadding(
+      key: ValueKey('proxy-group-${group.name}'),
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      sliver: DecoratedSliver(
+        decoration: BoxDecoration(
+          color: highlightedGroup == group.name
+              ? const Color(0xFFF1FAF6)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: stroke),
+        ),
+        sliver: SliverMainAxisGroup(
+          slivers: [
+            SliverToBoxAdapter(child: header),
+            if (!isCollapsed) ...[
+              const SliverToBoxAdapter(
+                child: Divider(height: 1, color: stroke),
+              ),
+              if (!group.selectable)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(12, 9, 12, 0),
+                    child: Text(
+                      '此策略组由内核自动分配节点',
+                      style: TextStyle(color: muted, fontSize: 10),
+                    ),
+                  ),
+                ),
+              SliverPadding(
                 key: ValueKey('proxy-members-${group.name}'),
                 padding: const EdgeInsets.all(10),
-                child: LayoutBuilder(
-                  builder: (context, box) {
+                sliver: SliverLayoutBuilder(
+                  builder: (context, constraints) {
                     final columns = layout == 'list'
                         ? 1
-                        : box.maxWidth > 650
+                        : constraints.crossAxisExtent > 650
                         ? 3
                         : 2;
-                    final width = (box.maxWidth - 8 * (columns - 1)) / columns;
-                    return Wrap(
+                    return SliverGrid(
                       key: ValueKey('proxy-layout-$layout-${group.name}'),
-                      spacing: 8,
-                      runSpacing: layout == 'compact' ? 6 : 8,
-                      children: [
-                        for (final name in names)
-                          SizedBox(
-                            width: width,
-                            child: _NodeTile(
-                              node:
-                                  c.proxies[name] ??
-                                  ProxyNode(name: name, type: 'Proxy'),
-                              controller: c,
-                              layout: layout,
-                              selected: group.now == name,
-                              enabled:
-                                  !c.switching.contains(group.name) &&
-                                  (group.selectable ||
-                                      (group.now == name &&
-                                          c.proxies[name]?.isGroup == true)),
-                              onTap: () => runAction(
-                                this.context,
-                                () =>
-                                    group.now == name &&
-                                        c.proxies[name]?.isGroup == true
-                                    ? _jumpToGroup(name)
-                                    : c.select(group, name),
-                              ),
-                              onTest: () => _test(() => c.testNodeDelay(name)),
-                              onViewGroup: () => unawaited(
-                                runAction(
-                                  this.context,
-                                  () => _jumpToGroup(name),
-                                ),
-                              ),
-                              groupName: group.name,
-                            ),
-                          ),
-                      ],
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: layout == 'compact' ? 6 : 8,
+                        mainAxisExtent: nodeExtent,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) => _node(group, sorted[index]),
+                        childCount: sorted.length,
+                        addAutomaticKeepAlives: false,
+                      ),
                     );
                   },
                 ),
@@ -922,6 +924,27 @@ class _ProxiesPageState extends State<ProxiesPage> {
       ),
     );
   }
+
+  Widget _node(ProxyNode group, String name) => _NodeTile(
+    key: ValueKey('proxy-node-${group.name}-$name'),
+    node: c.proxies[name] ?? ProxyNode(name: name, type: 'Proxy'),
+    controller: c,
+    layout: layout,
+    selected: group.now == name,
+    enabled:
+        !c.switching.contains(group.name) &&
+        (group.selectable ||
+            (group.now == name && c.proxies[name]?.isGroup == true)),
+    onTap: () => runAction(
+      context,
+      () => group.now == name && c.proxies[name]?.isGroup == true
+          ? _jumpToGroup(name)
+          : c.select(group, name),
+    ),
+    onTest: () => _test(() => c.testNodeDelay(name)),
+    onViewGroup: () => unawaited(runAction(context, () => _jumpToGroup(name))),
+    groupName: group.name,
+  );
 }
 
 class _GroupTrafficStats extends StatelessWidget {
@@ -1035,6 +1058,7 @@ class _DelayBadge extends StatelessWidget {
 
 class _NodeTile extends StatelessWidget {
   const _NodeTile({
+    super.key,
     required this.node,
     required this.controller,
     required this.layout,
@@ -1131,6 +1155,8 @@ class _NodeTile extends StatelessWidget {
                         const SizedBox(height: 5),
                         Text(
                           node.type,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: muted, fontSize: 9),
                         ),
                       ],
