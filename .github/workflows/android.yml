@@ -26,6 +26,7 @@ concurrency:
 
 env:
   FLUTTER_VERSION: '3.38.4'
+  ANDROID_BUILD_TOOLS: '36.1.0'
 
 jobs:
   build:
@@ -35,7 +36,6 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
-      signing: ${{ steps.signing.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +84,6 @@ jobs:
         run: flutter test --no-pub
 
       - name: Configure Android signing
-        id: signing
         if: github.event_name != 'pull_request'
         shell: bash
         env:
@@ -92,34 +91,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$KEYSTORE_BASE64" ]]; then
-            echo '::warning::Using the runner debug certificate. Configure Android signing secrets for APKs that support upgrades across builds.'
-            echo 'mode=debug' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          : "${KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD}"
-          : "${KEY_ALIAS:?Missing ANDROID_KEY_ALIAS}"
-          : "${KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD}"
-          echo 'mode=custom' >> "$GITHUB_OUTPUT"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-release.keystore"
-          chmod 600 "$RUNNER_TEMP/android-release.keystore"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          def escape(value):
-              return ''.join('\\u%04x' % int.from_bytes(value[i:i+2], 'big')
-                             for i in range(0, len(value), 2))
-          values = {
-              'storeFile': os.environ['RUNNER_TEMP'] + '/android-release.keystore',
-              'storePassword': os.environ['KEYSTORE_PASSWORD'],
-              'keyAlias': os.environ['KEY_ALIAS'],
-              'keyPassword': os.environ['KEY_PASSWORD'],
-          }
-          Path('android/key.properties').write_text(''.join(
-              f'{key}={escape(value.encode("utf-16-be"))}\n' for key, value in values.items()))
-          PY
+        run: bash scripts/configure-android-signing.sh
 
       - name: Build APKs
         run: flutter build apk --release --split-per-abi --no-pub
@@ -127,6 +99,15 @@ jobs:
       - name: Name APKs and generate SHA-256 checksums
         shell: pwsh
         run: ./scripts/build-android.ps1 -SkipBuild
+
+      - name: Verify official APK signatures
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          APK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          export APKSIGNER="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner"
+          bash scripts/verify-android-signing.sh dist "$APK_VERSION"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
@@ -171,5 +152,6 @@ jobs:
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
           RELEASE_PRERELEASE: ${{ inputs.prerelease || contains(needs.build.outputs.version, '-') }}
-          RELEASE_SIGNING: ${{ needs.build.outputs.signing }}
-        run: bash scripts/publish-android.sh
+        run: |
+          export APKSIGNER="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner"
+          bash scripts/publish-android.sh

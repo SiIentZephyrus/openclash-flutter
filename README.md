@@ -99,13 +99,11 @@ Flutter 原始分包输出位于 `build/app/outputs/flutter-apk/app-<ABI>-releas
 
 ```powershell
 .\scripts\configure-ci-signing.ps1 -KeystorePath 'C:\path\to\release.jks' -KeyAlias 'release'
-# 若需沿用此前本机打包的预览版证书，保留覆盖安装能力：
-.\scripts\configure-ci-signing.ps1 -UseCurrentDebugKey
 ```
 
-请复用并备份同一份签名文件。CI 密钥仅在构建期间写入 runner 临时目录，任务结束后删除，不会上传到 Artifacts 或 Release。没有签名 Secrets 时，仍会发布可下载的 CI debug 签名包，并在 Release 说明中标记临时签名；不同构建的证书可能不同，覆盖安装会失败，卸载重装会清除本地设置。需要持续覆盖升级时，应先配置固定签名 Secrets。来自 PR 的构建不读取签名 Secrets。
+CI 在构建期间使用临时签名文件，任务结束后会清理。正式构建和手动只构建任务都要求四个签名 Secrets 齐全。三个 APK 均须通过 Android SDK 的签名校验，且各自只有一个签名者，其证书 SHA-256 须与 `scripts/verify-android-signing.sh` 中记录的正式证书一致。发布任务会对下载的 APK 重新校验，缺少签名配置或校验失败时会停止发布。PR 构建使用测试签名，跳过正式签名校验。
 
-发布脚本的 7 项回归测试覆盖附件与校验、上传失败保留草稿、草稿重试、已发布版本不覆盖、标签与提交匹配以及签名说明，可用 `python -m unittest discover -s test -p ci_release_test.py -v` 运行（需要 Bash；Windows 可通过 `BASH_FOR_TESTS` 指定 Git Bash）。
+发布回归测试覆盖附件校验、草稿重试、已有版本保护、标签匹配，以及缺少签名配置或 APK 签名异常时停止发布。运行 `python -m unittest discover -s test -p ci_release_test.py -v`。Windows 可通过 `BASH_FOR_TESTS` 指定 Git Bash。
 
 工程保留 Flutter 生成的 iOS、Windows、Web 平台目录，但此次交付目标是 Android。其他平台未做发布验证；Web 还受控制器 CORS 与浏览器混合内容限制。
 

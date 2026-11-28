@@ -6,6 +6,7 @@ set -euo pipefail
 : "${RELEASE_TAG:?Missing release tag}"
 : "${RELEASE_VERSION:?Missing release version}"
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "${APK_DIRECTORY:-dist}"
 files=(
   "OpenClash-$RELEASE_VERSION-arm64-v8a.apk"
@@ -17,6 +18,7 @@ for file in "${files[@]}"; do
   [[ -s "$file" ]] || { echo "::error::Missing or empty release asset: $file"; exit 1; }
 done
 sha256sum --check "SHA256SUMS-$RELEASE_VERSION.txt"
+bash "$script_dir/verify-android-signing.sh" . "$RELEASE_VERSION"
 release_url="https://github.com/$GH_REPO/releases/tag/$RELEASE_TAG"
 
 # Published versions are immutable. Re-running CI with the same version should
@@ -42,15 +44,6 @@ Android APKs built from commit $GITHUB_SHA.
 
 Install one APK matching your device. SHA-256 checksums are included.
 EOF
-if [[ "${RELEASE_SIGNING:-debug}" != custom ]]; then
-  cat >> release-notes.md <<'EOF'
-
-Signing: this build uses the CI runner's temporary Android debug certificate.
-Upgrading from a differently signed build requires uninstalling it first (local
-settings will be removed). Configure the Android signing secrets before the next
-release to use a fixed certificate for future upgrades.
-EOF
-fi
 
 if [[ "$existing_draft" != true ]]; then
   gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" \

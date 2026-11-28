@@ -1,4 +1,5 @@
 """Exercise publishing without credentials or network calls."""
+import base64
 import hashlib
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '1.0.8'
+OFFICIAL_CERTIFICATE = '34a4dab9f5988c324bcd65b48b54dea68182c95a80d08397ae5d29a89cbbd50a'
 FILES = [f'OpenClash-{VERSION}-{abi}.apk' for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64')]
 FILES.append(f'SHA256SUMS-{VERSION}.txt')
 
@@ -59,16 +61,33 @@ exit 0
 '''.encode('utf-8'))
         gh.chmod(0o755)
 
-    def publish(self, case='new', signing='custom'):
+        apksigner = self.bin / 'apksigner'
+        apksigner.write_bytes('''#!/usr/bin/env bash
+set -eu
+[[ "$1 $2" == 'verify --print-certs' && -s "$3" ]] || exit 2
+if [[ "$3" == *x86_64.apk ]]; then
+  case "$MOCK_SIGNATURE" in
+    invalid) exit 1 ;;
+    wrong) echo 'Signer #1 certificate SHA-256 digest: 0000000000000000000000000000000000000000000000000000000000000000'; exit 0 ;;
+    missing) exit 0 ;;
+    multiple) echo "Signer #2 certificate SHA-256 digest: $MOCK_CERTIFICATE" ;;
+  esac
+fi
+echo "Signer #1 certificate SHA-256 digest: $MOCK_CERTIFICATE"
+'''.encode('utf-8'))
+        apksigner.chmod(0o755)
+
+    def publish(self, case='new', signature='official'):
         env = os.environ.copy()
         env.update(
             GH_REPO='example/project', GITHUB_SHA='test-commit',
             RELEASE_TAG=f'v{VERSION}', RELEASE_VERSION=VERSION,
-            RELEASE_SIGNING=signing, RELEASE_PRERELEASE='false',
+            RELEASE_PRERELEASE='false', APKSIGNER='apksigner',
             APK_DIRECTORY=self.apks.as_posix(),
             GITHUB_STEP_SUMMARY=self.summary.as_posix(),
             MOCK_CASE=case, MOCK_LOG=self.log.as_posix(),
             MOCK_ASSETS=self.assets.as_posix(), MOCK_BIN=self.bin.as_posix(),
+            MOCK_SIGNATURE=signature, MOCK_CERTIFICATE=OFFICIAL_CERTIFICATE,
             PUBLISH_SCRIPT=(ROOT / 'scripts/publish-android.sh').as_posix(),
         )
         bash = env.get('BASH_FOR_TESTS') or shutil.which('bash')
@@ -117,10 +136,41 @@ exit 0
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(calls, '')
 
-    def test_debug_signature_is_disclosed_in_release_notes(self):
-        result, _ = self.publish(signing='debug')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('temporary Android debug certificate', (self.apks / 'release-notes.md').read_text())
+    def test_signature_failure_blocks_github(self):
+        for signature in ('invalid', 'wrong', 'missing', 'multiple'):
+            with self.subTest(signature=signature):
+                result, calls = self.publish(signature=signature)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('OpenClash-' + VERSION + '-x86_64.apk', result.stdout)
+                self.assertEqual(calls, '')
+
+    def test_signing_setup_rejects_missing_secrets(self):
+        env = os.environ.copy()
+        env.update(
+            KEYSTORE_BASE64=base64.b64encode(b'not a real keystore').decode(),
+            KEYSTORE_PASSWORD='fixture', KEY_ALIAS='fixture', KEY_PASSWORD='fixture',
+            RUNNER_TEMP=self.folder.as_posix(),
+        )
+        variables = {
+            'KEYSTORE_BASE64': 'ANDROID_KEYSTORE_BASE64',
+            'KEYSTORE_PASSWORD': 'ANDROID_KEYSTORE_PASSWORD',
+            'KEY_ALIAS': 'ANDROID_KEY_ALIAS',
+            'KEY_PASSWORD': 'ANDROID_KEY_PASSWORD',
+        }
+        bash = env.get('BASH_FOR_TESTS') or shutil.which('bash')
+        self.assertIsNotNone(bash, 'Bash is required for signing setup tests')
+        script = (ROOT / 'scripts/configure-android-signing.sh').as_posix()
+        command = 'bash "$1"' if os.name != 'nt' else 'bash "$(cygpath -u "$1")"'
+        for variable, secret_name in variables.items():
+            with self.subTest(secret=secret_name):
+                result = subprocess.run(
+                    [bash, '-c', command, '--', script],
+                    env={**env, variable: ''}, cwd=self.folder,
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f'Missing {secret_name}', result.stderr)
+                self.assertFalse((self.folder / 'android-release.keystore').exists())
 
 
 if __name__ == '__main__':
