@@ -87,11 +87,19 @@ jobs:
         if: github.event_name != 'pull_request'
         shell: bash
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: bash scripts/configure-android-signing.sh
+          KEYSTORE_PASSWORD: negative-test-only
+          KEY_ALIAS: negative-test
+          KEY_PASSWORD: negative-test-only
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/wrong-certificate.p12"
+          trap 'rm -f -- "$fixture"' EXIT
+          keytool -genkeypair -storetype PKCS12 -keystore "$fixture" -alias "$KEY_ALIAS" \
+            -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=OpenClash CI negative test' \
+            -storepass:env KEYSTORE_PASSWORD
+          export KEYSTORE_BASE64
+          KEYSTORE_BASE64=$(base64 -w 0 "$fixture")
+          bash scripts/configure-android-signing.sh
 
       - name: Build APKs
         run: flutter build apk --release --split-per-abi --no-pub
