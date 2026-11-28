@@ -1,6 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'main.dart';
+import 'app_theme.dart';
 import 'app_notice.dart';
 
 Future<void> runAction(
@@ -44,44 +44,47 @@ class Panel extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: padding,
     decoration: BoxDecoration(
-      color: color ?? Colors.white,
+      color: color ?? context.surface,
       borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: stroke),
+      border: Border.all(color: context.stroke),
     ),
     child: child,
   );
 }
 
 class Tag extends StatelessWidget {
-  const Tag(this.text, {super.key, this.color = accent, this.dot = false});
+  const Tag(this.text, {super.key, this.color, this.dot = false});
   final String text;
-  final Color color;
+  final Color? color;
   final bool dot;
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-    decoration: BoxDecoration(
-      color: color.withValues(alpha: .08),
-      borderRadius: BorderRadius.circular(7),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (dot) ...[
-          Icon(Icons.circle, size: 6, color: color),
-          const SizedBox(width: 5),
-        ],
-        Text(
-          text,
-          style: TextStyle(
-            color: color,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
+  Widget build(BuildContext context) {
+    final color = this.color ?? context.accent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (dot) ...[
+            Icon(Icons.circle, size: 6, color: color),
+            const SizedBox(width: 5),
+          ],
+          Text(
+            text,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 class SectionTitle extends StatelessWidget {
@@ -110,7 +113,7 @@ class SectionTitle extends StatelessWidget {
                 const SizedBox(height: 5),
                 Text(
                   subtitle!,
-                  style: const TextStyle(fontSize: 11, color: muted),
+                  style: TextStyle(fontSize: 11, color: context.muted),
                 ),
               ],
             ],
@@ -136,13 +139,13 @@ class EmptyState extends StatelessWidget {
     padding: const EdgeInsets.all(30),
     child: Column(
       children: [
-        Icon(icon, color: muted, size: 38),
+        Icon(icon, color: context.muted, size: 38),
         const SizedBox(height: 14),
         Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
         Text(
           message,
-          style: const TextStyle(color: muted, fontSize: 12),
+          style: TextStyle(color: context.muted, fontSize: 12),
           textAlign: TextAlign.center,
         ),
       ],
@@ -156,25 +159,39 @@ class SparkChart extends StatelessWidget {
     required this.values,
     this.secondary,
     this.large = false,
-    this.color = accent,
+    this.color,
   });
   final List<double> values;
   final List<double>? secondary;
   final bool large;
-  final Color color;
+  final Color? color;
   @override
   Widget build(BuildContext context) => SizedBox(
     height: large ? 160 : 32,
     width: double.infinity,
-    child: CustomPaint(painter: _ChartPainter(values, secondary, color, large)),
+    child: CustomPaint(
+      painter: _ChartPainter(
+        values,
+        secondary,
+        color ?? context.accent,
+        context.stroke,
+        large,
+      ),
+    ),
   );
 }
 
 class _ChartPainter extends CustomPainter {
-  _ChartPainter(this.values, this.secondary, this.color, this.grid);
+  _ChartPainter(
+    this.values,
+    this.secondary,
+    this.color,
+    this.gridColor,
+    this.grid,
+  );
   final List<double> values;
   final List<double>? secondary;
-  final Color color;
+  final Color color, gridColor;
   final bool grid;
   @override
   void paint(Canvas canvas, Size size) {
@@ -187,7 +204,7 @@ class _ChartPainter extends CustomPainter {
           Offset(0, y),
           Offset(size.width, y),
           Paint()
-            ..color = stroke
+            ..color = gridColor
             ..strokeWidth = 1,
         );
       }
@@ -274,7 +291,7 @@ class RegionIcon extends StatelessWidget {
       'JP' => const Color(0xFFC2667A),
       'SG' => const Color(0xFFCF915D),
       'US' => const Color(0xFF668EBF),
-      _ => accent,
+      _ => context.accent,
     };
     return Container(
       width: 36,

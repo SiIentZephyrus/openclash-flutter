@@ -7,11 +7,13 @@ import 'models.dart';
 import 'controller_store.dart';
 import 'group_traffic.dart';
 import 'connection_history.dart';
+import 'delay_settings.dart';
 
 enum DashboardSection {
   session,
   overview,
   proxies,
+  providers,
   groupTraffic,
   connections,
   logs,
@@ -41,10 +43,28 @@ class DashboardController extends ChangeNotifier {
   String address = '', version = '—', mode = 'rule';
   String get secret => _profile?.secret ?? '';
   String? error;
+  ApiFailure? connectionFailure;
+  final _lastConnected = <String, DateTime>{};
+  DateTime? get lastConnected => _lastConnected[address];
+  final interruptedStreams = <String>{};
+  bool get backgrounded => _backgrounded;
+  DelaySettings delaySettings = const DelaySettings();
+
+  Future<void> saveDelaySettings(DelaySettings settings) async {
+    await settings.save();
+    if (_disposed) return;
+    delaySettings = settings;
+    _emit(const [DashboardSection.session]);
+  }
+
   Map<String, ProxyNode> proxies = {};
   final Map<String, ProxyNode> _providerNodes = {};
   final Set<String> _rootProxyNames = {};
   String? providerError;
+  final _providerSummaries = <ProviderKind, List<ProviderSummary>>{};
+  final _providerUpdates = <(ClashApi, ProviderKind, String)>{};
+  List<ProviderSummary> providersFor(ProviderKind kind) =>
+      _providerSummaries[kind] ?? const [];
   List<LogEntry> logs = [];
   List<Map<String, dynamic>> rules = [];
   List<Map<String, dynamic>> _connections = [];
@@ -53,6 +73,19 @@ class DashboardController extends ChangeNotifier {
   List<Map<String, dynamic>> get connections => _connections;
   List<Map<String, dynamic>> get recentConnections =>
       _connectionHistory.connections;
+  Duration? connectionDuration(
+    Map<String, dynamic> item, {
+    required bool active,
+  }) {
+    final start = DateTime.tryParse('${item['start'] ?? ''}');
+    final endedAt = _connectionHistory.endedAt('${item['id']}');
+    if (start == null || (!active && endedAt == null)) return null;
+    final elapsed =
+        DateTime.now().difference(start) -
+        (active ? Duration.zero : _trafficClock.elapsed - endedAt!);
+    return elapsed.isNegative ? Duration.zero : elapsed;
+  }
+
   set connections(List<Map<String, dynamic>> value) {
     _connections = value;
     _connectionHistory.update(value, now: _trafficClock.elapsed);
@@ -224,6 +257,7 @@ class DashboardController extends ChangeNotifier {
     }
     _sockets.clear();
     liveStreams.clear();
+    interruptedStreams.clear();
   }
 
   void _resetMetrics() {
@@ -236,6 +270,7 @@ class DashboardController extends ChangeNotifier {
     logs = [];
     proxies = {};
     _providerNodes.clear();
+    _providerSummaries.clear();
     _rootProxyNames.clear();
     providerError = null;
   }
@@ -243,6 +278,7 @@ class DashboardController extends ChangeNotifier {
   Future<void> initialize() => _initialization ??= _initialize();
 
   Future<void> _initialize() async {
+    unawaited(_loadDelaySettings());
     try {
       final saved = await _store.readProfiles();
       if (_disposed) return;
@@ -262,6 +298,14 @@ class DashboardController extends ChangeNotifier {
     if (_profile != null) await reconnect();
   }
 
+  Future<void> _loadDelaySettings() async {
+    final previous = delaySettings;
+    final settings = await DelaySettings.load();
+    if (_disposed || !identical(delaySettings, previous)) return;
+    delaySettings = settings;
+    _emit(const [DashboardSection.session]);
+  }
+
   Future<List<Map<String, dynamic>>> _fetchInitial(ClashApi api) =>
       Future.wait([
         api.request('GET', '/version'),
@@ -276,6 +320,8 @@ class DashboardController extends ChangeNotifier {
     _readProxies(values[2]);
     _readProviders(values[3]);
     connected = true;
+    connectionFailure = null;
+    _lastConnected[address] = DateTime.now();
     _startLiveUpdates();
   }
 
@@ -460,12 +506,16 @@ class DashboardController extends ChangeNotifier {
       final values = await _fetchInitial(api);
       if (!current() || savingProfile) return;
       _applyInitial(values);
-      _emit(const [DashboardSection.proxies]);
+      _emit(const [
+        DashboardSection.proxies,
+        DashboardSection.providers,
+        DashboardSection.streams,
+      ]);
     } catch (e) {
       if (!current() || savingProfile) return;
       _stopStreams();
       connected = false;
-      error = e.toString();
+      _recordConnectionFailure(e);
       _emit();
       _retrySavedLater();
     }
@@ -476,6 +526,7 @@ class DashboardController extends ChangeNotifier {
     _resetMetrics();
     connected = false;
     connecting = false;
+    connectionFailure = null;
     _emit();
   }
 
@@ -490,6 +541,7 @@ class DashboardController extends ChangeNotifier {
     connected = false;
     connecting = true;
     error = null;
+    connectionFailure = null;
     version = '—';
     _emit();
     try {
@@ -498,7 +550,7 @@ class DashboardController extends ChangeNotifier {
       _applyInitial(values);
     } catch (e) {
       if (generation == _generation) {
-        error = e.toString();
+        _recordConnectionFailure(e);
         connected = false;
       }
     } finally {
@@ -510,6 +562,17 @@ class DashboardController extends ChangeNotifier {
         _emit();
       }
     }
+  }
+
+  void _recordConnectionFailure(Object failure) {
+    error = failure.toString();
+    connectionFailure = failure is ApiException
+        ? failure.failure ??
+              switch (failure.statusCode) {
+                401 || 403 => ApiFailure.authentication,
+                _ => ApiFailure.response,
+              }
+        : ApiFailure.response;
   }
 
   Future<void> _listen(String path, int generation) async {
@@ -528,6 +591,7 @@ class DashboardController extends ChangeNotifier {
       if (retryScheduled || !current()) return;
       retryScheduled = true;
       liveStreams.remove(path);
+      interruptedStreams.add(path);
       if (path == '/connections') {
         _connectionTrafficExpiry?.cancel();
         _groupTraffic.reset();
@@ -554,7 +618,7 @@ class DashboardController extends ChangeNotifier {
       _sockets.add(channel);
       subscription = channel.stream.listen(
         (event) {
-          if (!current()) return;
+          if (!current() || retryScheduled) return;
           try {
             final data = jsonDecode(event as String) as Map<String, dynamic>;
             if (path == '/traffic') {
@@ -583,6 +647,7 @@ class DashboardController extends ChangeNotifier {
             }
             if (path == '/logs') _addLog(LogEntry.fromJson(data));
             final firstFrame = liveStreams.add(path);
+            interruptedStreams.remove(path);
             _emit([
               if (path != '/logs') DashboardSection.overview,
               if (path == '/logs') DashboardSection.logs,
@@ -602,6 +667,7 @@ class DashboardController extends ChangeNotifier {
       _subscriptions.add(subscription);
       await channel.ready.timeout(const Duration(seconds: 12));
       if (current() && !retryScheduled && liveStreams.add(path)) {
+        interruptedStreams.remove(path);
         streamStatusChanged();
       }
     } catch (_) {
@@ -653,8 +719,12 @@ class DashboardController extends ChangeNotifier {
     final result = <String, ProxyNode>{};
     try {
       final providers = data['providers'] as Map<String, dynamic>? ?? {};
+      final summaries = <ProviderSummary>[];
       for (final entry in providers.entries) {
         final provider = entry.value as Map<String, dynamic>;
+        summaries.add(
+          ProviderSummary(entry.key, ProviderKind.proxies, provider),
+        );
         for (final raw in provider['proxies'] as List? ?? []) {
           final json = raw as Map<String, dynamic>;
           final name = json['name'] as String;
@@ -669,6 +739,7 @@ class DashboardController extends ChangeNotifier {
           );
         }
       }
+      _providerSummaries[ProviderKind.proxies] = summaries;
     } catch (_) {
       providerError = '订阅节点数据无效，请刷新重试';
       return;
@@ -694,7 +765,57 @@ class DashboardController extends ChangeNotifier {
     if (generation == _generation) {
       _readProxies(results[0]);
       _readProviders(results[1]);
-      _emit(const [DashboardSection.proxies]);
+      _emit(const [DashboardSection.proxies, DashboardSection.providers]);
+    }
+  }
+
+  Future<void> loadProviders(ProviderKind kind) async {
+    final api = _api;
+    if (!connected || api == null) throw ApiException('请先连接控制器');
+    final data = await api.request('GET', '/providers/${kind.path}');
+    if (!identical(_api, api)) return;
+    if (kind == ProviderKind.proxies) {
+      _readProviders(data);
+      if (providerError != null) throw ApiException(providerError!);
+      _emit(const [DashboardSection.proxies, DashboardSection.providers]);
+    } else {
+      final entries = data['providers'] as Map<String, dynamic>;
+      _providerSummaries[kind] = [
+        for (final entry in entries.entries)
+          ProviderSummary(entry.key, kind, entry.value as Map<String, dynamic>),
+      ];
+      _emit(const [DashboardSection.providers]);
+    }
+  }
+
+  Future<void> updateProvider(ProviderSummary provider) async {
+    final api = _api;
+    if (!connected || api == null) throw ApiException('请先连接控制器');
+    if (!provider.canUpdate) throw ApiException('此集合由内核管理');
+    final key = (api, provider.kind, provider.name);
+    if (!_providerUpdates.add(key)) throw ApiException('此集合正在更新');
+    try {
+      await api.request(
+        'PUT',
+        '/providers/${provider.kind.path}/${Uri.encodeComponent(provider.name)}',
+        timeout: const Duration(seconds: 60),
+      );
+      if (!identical(_api, api)) return;
+      try {
+        if (provider.kind == ProviderKind.proxies) {
+          await refresh();
+          if (identical(_api, api) && providerError != null) {
+            throw ApiException(providerError!);
+          }
+        } else {
+          await loadProviders(ProviderKind.rules);
+          if (identical(_api, api)) await loadRules();
+        }
+      } catch (e) {
+        throw ApiException('已更新，但刷新列表失败：$e');
+      }
+    } finally {
+      _providerUpdates.remove(key);
     }
   }
 
@@ -782,6 +903,7 @@ class DashboardController extends ChangeNotifier {
       throw ApiException(providerError ?? '没有可测速的节点，请刷新代理及订阅数据');
     }
     final api = _api!;
+    final settings = delaySettings;
     final run = _delayRun = _DelayTestRun();
     bool active() => identical(_delayRun, run) && !run.cancelled;
     final providerChecks = <String, Future<Map<String, int?>>>{};
@@ -841,20 +963,16 @@ class DashboardController extends ChangeNotifier {
       final path = node.providerName == null
           ? '/proxies/${Uri.encodeComponent(node.name)}/delay'
           : '/providers/proxies/${Uri.encodeComponent(node.providerName!)}/${Uri.encodeComponent(node.name)}/healthcheck';
-      final url = Uri.tryParse(node.testUrl ?? '');
+      final url = node.testUrl?.trim() ?? '';
       try {
         final result = await api.request(
           'GET',
           path,
           abortTrigger: run.abort.future,
+          timeout: Duration(seconds: 7, milliseconds: settings.timeoutMs),
           query: {
-            'url':
-                url != null &&
-                    ['http', 'https'].contains(url.scheme) &&
-                    url.host.isNotEmpty
-                ? url.toString()
-                : 'https://www.gstatic.com/generate_204',
-            'timeout': '5000',
+            'url': DelaySettings.supportsUrl(url) ? url : settings.url,
+            'timeout': '${settings.timeoutMs}',
           },
         );
         final value = result['delay'];
@@ -967,6 +1085,18 @@ class DashboardController extends ChangeNotifier {
       connections = connections.where((c) => c['id'] != id).toList();
       _emit(const [DashboardSection.connections, DashboardSection.overview]);
     }
+  }
+
+  Future<void> closeAllConnections() async {
+    final api = _api;
+    if (!connected || api == null) throw ApiException('请先连接控制器');
+    final ids = connections.map((item) => item['id']).toSet();
+    await api.request('DELETE', '/connections');
+    if (!identical(_api, api)) return;
+    connections = connections
+        .where((item) => !ids.contains(item['id']))
+        .toList();
+    _emit(const [DashboardSection.connections, DashboardSection.overview]);
   }
 
   void clearLogs() {

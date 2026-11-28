@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'app_theme.dart';
 
 enum NoticeTone {
   success(Color(0xFF087F72), Icons.check_rounded),
@@ -10,6 +11,16 @@ enum NoticeTone {
   const NoticeTone(this.color, this.icon);
   final Color color;
   final IconData icon;
+
+  Color foreground(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.light
+      ? color
+      : switch (this) {
+          success => context.accent,
+          error => context.colors.error,
+          warning => const Color(0xFFE5BC77),
+          info => const Color(0xFF9DBDE3),
+        };
 }
 
 class NoticeMetric {
@@ -155,12 +166,12 @@ class AppNoticeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = notice.tone.color;
+    final color = notice.tone.foreground(context);
     return Material(
       type: MaterialType.transparency,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: context.surface,
           borderRadius: BorderRadius.circular(floating ? 19 : 13),
           border: Border.all(color: color.withValues(alpha: .16)),
           boxShadow: floating
@@ -195,8 +206,8 @@ class AppNoticeCard extends StatelessWidget {
                 children: [
                   Text(
                     notice.title,
-                    style: const TextStyle(
-                      color: Color(0xFF18312F),
+                    style: TextStyle(
+                      color: context.ink,
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                       height: 1.4,
@@ -206,8 +217,8 @@ class AppNoticeCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       notice.message!,
-                      style: const TextStyle(
-                        color: Color(0xFF728681),
+                      style: TextStyle(
+                        color: context.muted,
                         fontSize: 11,
                         height: 1.65,
                       ),
@@ -226,7 +237,9 @@ class AppNoticeCard extends StatelessWidget {
                               vertical: 5,
                             ),
                             decoration: BoxDecoration(
-                              color: metric.tone.color.withValues(alpha: .07),
+                              color: metric.tone
+                                  .foreground(context)
+                                  .withValues(alpha: .07),
                               borderRadius: BorderRadius.circular(7),
                             ),
                             child: Text.rich(
@@ -247,7 +260,7 @@ class AppNoticeCard extends StatelessWidget {
                                 ],
                               ),
                               style: TextStyle(
-                                color: metric.tone.color,
+                                color: metric.tone.foreground(context),
                                 fontSize: 10,
                                 height: 1.3,
                               ),
@@ -271,10 +284,10 @@ class AppNoticeCard extends StatelessWidget {
                     key: const ValueKey('dismiss-app-notice'),
                     onPressed: onClose,
                     padding: EdgeInsets.zero,
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.close_rounded,
                       size: 16,
-                      color: Color(0xFF94A59F),
+                      color: context.muted,
                     ),
                   ),
                 ),
@@ -301,7 +314,7 @@ class TaskProgressNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     decoration: BoxDecoration(
-      color: const Color(0xFFECF5F1),
+      color: context.selectedSurface,
       borderRadius: BorderRadius.circular(12),
     ),
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -318,8 +331,8 @@ class TaskProgressNotice extends StatelessWidget {
             Expanded(
               child: Text(
                 title,
-                style: const TextStyle(
-                  color: Color(0xFF267C67),
+                style: TextStyle(
+                  color: context.colors.onPrimaryContainer,
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
                 ),
@@ -328,7 +341,10 @@ class TaskProgressNotice extends StatelessWidget {
             Text(
               '$completed/$total',
               key: const ValueKey('latency-progress'),
-              style: const TextStyle(color: Color(0xFF267C67), fontSize: 10),
+              style: TextStyle(
+                color: context.colors.onPrimaryContainer,
+                fontSize: 10,
+              ),
             ),
             if (onCancel != null) ...[
               const SizedBox(width: 8),
@@ -346,8 +362,8 @@ class TaskProgressNotice extends StatelessWidget {
         LinearProgressIndicator(
           value: total == 0 ? 0 : (completed / total).clamp(0, 1),
           minHeight: 3,
-          backgroundColor: const Color(0xFFD8EAE2),
-          color: const Color(0xFF358D77),
+          backgroundColor: context.accent.withValues(alpha: .18),
+          color: context.accent,
           borderRadius: BorderRadius.circular(3),
         ),
       ],

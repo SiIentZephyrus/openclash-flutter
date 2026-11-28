@@ -4,10 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dashboard_controller.dart';
-import 'main.dart';
+import 'app_theme.dart';
 import 'models.dart';
 import 'ui_components.dart';
 import 'app_notice.dart';
+import 'providers_page.dart';
 import 'group_traffic.dart';
 
 const _layouts = {'card': '卡片', 'list': '列表', 'compact': '紧凑'};
@@ -329,7 +330,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      backgroundColor: canvas,
+      backgroundColor: context.canvasColor,
       builder: (sheetContext) => SafeArea(
         child: ListenableBuilder(
           listenable: c.updatesFor(DashboardSection.proxies),
@@ -351,7 +352,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                     ),
                   ),
                   ListTile(
-                    leading: const Icon(Icons.speed_rounded, color: accent),
+                    leading: Icon(Icons.speed_rounded, color: context.accent),
                     title: const Text('测试所有节点延迟'),
                     subtitle: Text(
                       c.testing
@@ -366,7 +367,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                     },
                   ),
                   ListTile(
-                    leading: const Icon(Icons.layers_outlined, color: accent),
+                    leading: Icon(Icons.layers_outlined, color: context.accent),
                     title: const Text('测试策略组延迟'),
                     subtitle: const Text(
                       '测试各策略组当前选中的路线',
@@ -380,7 +381,10 @@ class _ProxiesPageState extends State<ProxiesPage> {
                   ),
                   if (c.canRetryDelays)
                     ListTile(
-                      leading: const Icon(Icons.replay_rounded, color: accent),
+                      leading: Icon(
+                        Icons.replay_rounded,
+                        color: context.accent,
+                      ),
                       title: const Text('重试失败或超时节点'),
                       onTap: () {
                         Navigator.pop(sheetContext);
@@ -420,12 +424,20 @@ class _ProxiesPageState extends State<ProxiesPage> {
                       unawaited(runAction(this.context, c.refresh));
                     },
                   ),
+                  ListTile(
+                    leading: const Icon(Icons.inventory_2_outlined),
+                    title: const Text('订阅与规则集'),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      ProvidersPage.open(this.context, c, ProviderKind.proxies);
+                    },
+                  ),
                   const Divider(),
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(12, 4, 12, 10),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
                     child: Text(
                       '页面布局',
-                      style: TextStyle(fontSize: 12, color: muted),
+                      style: TextStyle(fontSize: 12, color: context.muted),
                     ),
                   ),
                   Padding(
@@ -522,7 +534,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                         _ => Icons.grid_view_rounded,
                       },
                       size: 20,
-                      color: accent,
+                      color: context.accent,
                     ),
                     itemBuilder: (_) => [
                       for (final item in _layouts.entries)
@@ -533,10 +545,10 @@ class _ProxiesPageState extends State<ProxiesPage> {
                     tooltip: '节点排序',
                     initialValue: sort,
                     onSelected: (value) => setState(() => sort = value),
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.sort_rounded,
                       size: 21,
-                      color: accent,
+                      color: context.accent,
                     ),
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: 'default', child: Text('默认排序')),
@@ -558,10 +570,10 @@ class _ProxiesPageState extends State<ProxiesPage> {
                     'nodes' => '搜索节点名称或地区',
                     _ => '搜索节点、地区或策略组',
                   },
-                  prefixIcon: const Icon(
+                  prefixIcon: Icon(
                     Icons.search_rounded,
                     size: 20,
-                    color: muted,
+                    color: context.muted,
                   ),
                   suffixIcon: query.isEmpty
                       ? null
@@ -571,10 +583,10 @@ class _ProxiesPageState extends State<ProxiesPage> {
                             search.clear();
                             setState(() => query = '');
                           },
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.close_rounded,
                             size: 18,
-                            color: muted,
+                            color: context.muted,
                           ),
                         ),
                 ),
@@ -606,9 +618,9 @@ class _ProxiesPageState extends State<ProxiesPage> {
                                 onSelected: (_) =>
                                     setState(() => searchScope = scope.key),
                                 showCheckmark: false,
-                                selectedColor: const Color(0xFFDFF0EA),
-                                backgroundColor: Colors.white,
-                                side: const BorderSide(color: stroke),
+                                selectedColor: context.selectedSurface,
+                                backgroundColor: context.surface,
+                                side: BorderSide(color: context.stroke),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(9),
                                 ),
@@ -623,30 +635,30 @@ class _ProxiesPageState extends State<ProxiesPage> {
                     tooltip: '收起所有策略组',
                     onPressed: _collapseAll,
                     visualDensity: VisualDensity.compact,
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.unfold_less_rounded,
                       size: 20,
-                      color: accent,
+                      color: context.accent,
                     ),
                   ),
                   IconButton(
                     tooltip: '展开所有策略组',
                     onPressed: _expandAll,
                     visualDensity: VisualDensity.compact,
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.unfold_more_rounded,
                       size: 20,
-                      color: accent,
+                      color: context.accent,
                     ),
                   ),
                   IconButton(
                     tooltip: '返回顶部',
                     onPressed: _returnToTop,
                     visualDensity: VisualDensity.compact,
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.vertical_align_top_rounded,
                       size: 20,
-                      color: accent,
+                      color: context.accent,
                     ),
                   ),
                 ],
@@ -725,12 +737,11 @@ class _ProxiesPageState extends State<ProxiesPage> {
                                           () => c.changeMode(value.first),
                                         ),
                                   style: SegmentedButton.styleFrom(
-                                    side: const BorderSide(color: stroke),
-                                    selectedBackgroundColor: const Color(
-                                      0xFFDFF0EA,
-                                    ),
-                                    selectedForegroundColor: accent,
-                                    backgroundColor: Colors.white,
+                                    side: BorderSide(color: context.stroke),
+                                    selectedBackgroundColor:
+                                        context.selectedSurface,
+                                    selectedForegroundColor: context.accent,
+                                    backgroundColor: context.surface,
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 10,
                                     ),
@@ -792,8 +803,8 @@ class _ProxiesPageState extends State<ProxiesPage> {
                   heroTag: 'proxy-actions',
                   tooltip: '代理快捷菜单',
                   onPressed: _showMenu,
-                  backgroundColor: accent,
-                  foregroundColor: Colors.white,
+                  backgroundColor: context.accent,
+                  foregroundColor: context.colors.onPrimary,
                   child: const Icon(Icons.bolt_rounded),
                 ),
               ),
@@ -874,7 +885,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                   group.type == 'Selector'
                       ? Icons.layers_outlined
                       : Icons.auto_awesome_rounded,
-                  color: accent,
+                  color: context.accent,
                   size: 20,
                 ),
                 const SizedBox(width: 9),
@@ -896,7 +907,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                         '${group.members.length} 个 · ${group.now.isEmpty ? group.type : group.now}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 9, color: muted),
+                        style: TextStyle(fontSize: 9, color: context.muted),
                       ),
                     ],
                   ),
@@ -909,9 +920,9 @@ class _ProxiesPageState extends State<ProxiesPage> {
                       ? null
                       : () => _test(() => c.testDelay(group)),
                   visualDensity: VisualDensity.compact,
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.speed_rounded,
-                    color: accent,
+                    color: context.accent,
                     size: 19,
                   ),
                 ),
@@ -919,7 +930,7 @@ class _ProxiesPageState extends State<ProxiesPage> {
                   isCollapsed
                       ? Icons.keyboard_arrow_down_rounded
                       : Icons.keyboard_arrow_up_rounded,
-                  color: muted,
+                  color: context.muted,
                   size: 18,
                 ),
               ],
@@ -946,25 +957,25 @@ class _ProxiesPageState extends State<ProxiesPage> {
       sliver: DecoratedSliver(
         decoration: BoxDecoration(
           color: highlightedGroup == group.name
-              ? const Color(0xFFF1FAF6)
-              : Colors.white,
+              ? context.selectedSurface
+              : context.surface,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: stroke),
+          border: Border.all(color: context.stroke),
         ),
         sliver: SliverMainAxisGroup(
           slivers: [
             SliverToBoxAdapter(child: header),
             if (!isCollapsed) ...[
-              const SliverToBoxAdapter(
-                child: Divider(height: 1, color: stroke),
+              SliverToBoxAdapter(
+                child: Divider(height: 1, color: context.stroke),
               ),
               if (!group.selectable)
-                const SliverToBoxAdapter(
+                SliverToBoxAdapter(
                   child: Padding(
-                    padding: EdgeInsets.fromLTRB(12, 9, 12, 0),
+                    padding: const EdgeInsets.fromLTRB(12, 9, 12, 0),
                     child: Text(
                       '此策略组由内核自动分配节点',
-                      style: TextStyle(color: muted, fontSize: 10),
+                      style: TextStyle(color: context.muted, fontSize: 10),
                     ),
                   ),
                 ),
@@ -1106,9 +1117,9 @@ class _GroupDirectoryState extends State<_GroupDirectory> {
                           final starred = favorites.contains(group.name);
                           return ListTile(
                             key: ValueKey('directory-group-${group.name}'),
-                            leading: const Icon(
+                            leading: Icon(
                               Icons.layers_outlined,
-                              color: accent,
+                              color: context.accent,
                             ),
                             title: Text(
                               group.name,
@@ -1123,7 +1134,7 @@ class _GroupDirectoryState extends State<_GroupDirectory> {
                                 starred
                                     ? Icons.star_rounded
                                     : Icons.star_border_rounded,
-                                color: accent,
+                                color: context.accent,
                               ),
                               onPressed: saving
                                   ? null
@@ -1161,9 +1172,8 @@ class _GroupTrafficStats extends StatelessWidget {
             label: '$name ${upload ? '上传' : '下载'}速率',
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: (upload ? accent : const Color(0xFF6089AE)).withValues(
-                  alpha: .06,
-                ),
+                color: (upload ? context.accent : const Color(0xFF6089AE))
+                    .withValues(alpha: .06),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Padding(
@@ -1174,7 +1184,7 @@ class _GroupTrafficStats extends StatelessWidget {
                     Icon(
                       upload ? Icons.north_rounded : Icons.south_rounded,
                       size: 12,
-                      color: upload ? accent : const Color(0xFF6089AE),
+                      color: upload ? context.accent : const Color(0xFF6089AE),
                     ),
                     const SizedBox(width: 4),
                     Text(
@@ -1187,7 +1197,7 @@ class _GroupTrafficStats extends StatelessWidget {
                       key: ValueKey(
                         'group-${upload ? 'upload' : 'download'}-$name',
                       ),
-                      style: const TextStyle(fontSize: 10, color: ink),
+                      style: TextStyle(fontSize: 10, color: context.ink),
                     ),
                   ],
                 ),
@@ -1232,12 +1242,12 @@ class _DelayBadge extends StatelessWidget {
         ? '超时'
         : '$delay ms';
     final color = error != null || delay == 0
-        ? const Color(0xFFC37769)
+        ? NoticeTone.error.foreground(context)
         : delay == null
-        ? muted
+        ? context.muted
         : delay > 150
-        ? const Color(0xFFB89248)
-        : accent;
+        ? NoticeTone.warning.foreground(context)
+        : context.accent;
     return Tooltip(
       message: error ?? (group ? '策略组延迟；未单独测速时显示当前选中路线的延迟' : '节点连接延迟'),
       child: Text(
@@ -1281,13 +1291,13 @@ class _NodeTile extends StatelessWidget {
       style: TextStyle(
         fontSize: layout == 'list' ? 12 : 11,
         fontWeight: FontWeight.w700,
-        color: selected ? accent : ink,
+        color: selected ? context.accent : context.ink,
       ),
     );
     final selectedIcon = Icon(
       selected ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
       size: 16,
-      color: selected ? accent : const Color(0xFFD5DEDC),
+      color: selected ? context.accent : context.stroke,
     );
     final badge = _DelayBadge(controller: controller, name: node.name);
     final test = SizedBox(
@@ -1304,8 +1314,8 @@ class _NodeTile extends StatelessWidget {
           Icons.speed_rounded,
           size: 18,
           color: controller.testing || !controller.canTest(node.name)
-              ? muted.withValues(alpha: .4)
-              : accent,
+              ? context.muted.withValues(alpha: .4)
+              : context.accent,
         ),
       ),
     );
@@ -1316,7 +1326,7 @@ class _NodeTile extends StatelessWidget {
         key: ValueKey('view-group-$groupName-${node.name}'),
         tooltip: '查看策略组 ${node.name}',
         padding: EdgeInsets.zero,
-        icon: const Icon(Icons.shortcut_rounded, size: 18, color: accent),
+        icon: Icon(Icons.shortcut_rounded, size: 18, color: context.accent),
         onPressed: onViewGroup,
       ),
     );
@@ -1326,11 +1336,13 @@ class _NodeTile extends StatelessWidget {
       label: '${node.name}${selected ? '，已选择' : ''}',
       hint: node.isGroup && selected ? '点击查看策略组' : null,
       child: Material(
-        color: selected ? const Color(0xFFEDF8F3) : const Color(0xFFFAFBFB),
+        color: selected
+            ? context.selectedSurface
+            : context.colors.surfaceContainerLow,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(13),
           side: BorderSide(
-            color: selected ? accent : stroke,
+            color: selected ? context.accent : context.stroke,
             width: selected ? 1.4 : 1,
           ),
         ),
@@ -1354,7 +1366,7 @@ class _NodeTile extends StatelessWidget {
                           node.type,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: muted, fontSize: 9),
+                          style: TextStyle(color: context.muted, fontSize: 9),
                         ),
                       ],
                     ),
@@ -1393,13 +1405,13 @@ class _NodeTile extends StatelessWidget {
                   Row(
                     children: [
                       if (node.isGroup)
-                        const SizedBox(
+                        SizedBox(
                           width: 20,
                           height: 34,
                           child: Icon(
                             Icons.layers_outlined,
                             size: 18,
-                            color: accent,
+                            color: context.accent,
                           ),
                         )
                       else
@@ -1420,7 +1432,7 @@ class _NodeTile extends StatelessWidget {
                           node.type,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: muted, fontSize: 9),
+                          style: TextStyle(color: context.muted, fontSize: 9),
                         ),
                       ),
                       const SizedBox(width: 4),

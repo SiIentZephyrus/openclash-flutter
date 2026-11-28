@@ -3,10 +3,13 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+enum ApiFailure { unreachable, authentication, response }
+
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.failure});
   final String message;
   final int? statusCode;
+  final ApiFailure? failure;
   @override
   String toString() => message;
 }
@@ -68,21 +71,34 @@ class ClashApi {
             },
           );
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw ApiException(switch (response.statusCode) {
-          401 || 403 => '认证失败，请检查 API Secret',
-          404 => '接口不存在，请检查控制器地址和内核版本',
-          _ => '请求失败（HTTP ${response.statusCode}）',
-        }, statusCode: response.statusCode);
+        throw ApiException(
+          switch (response.statusCode) {
+            401 || 403 => '认证失败，请检查 API Secret',
+            404 => '接口不存在，请检查控制器地址和内核版本',
+            _ => '请求失败（HTTP ${response.statusCode}）',
+          },
+          statusCode: response.statusCode,
+          failure: response.statusCode == 401 || response.statusCode == 403
+              ? ApiFailure.authentication
+              : ApiFailure.response,
+        );
       }
-      return response.body.isEmpty
-          ? {}
-          : (jsonDecode(response.body) as Map<String, dynamic>);
+      if (response.body.isEmpty) return {};
+      final data = jsonDecode(response.body);
+      if (data is! Map<String, dynamic>) throw const FormatException();
+      return data;
     } on TimeoutException {
-      throw ApiException('连接超时，请检查路由器地址和网络');
+      throw ApiException('连接超时，请检查路由器地址和网络', failure: ApiFailure.unreachable);
     } on http.ClientException {
-      throw ApiException('无法连接控制器，请检查网络、端口或浏览器跨域设置');
+      throw ApiException(
+        '无法连接控制器，请检查网络、端口或浏览器跨域设置',
+        failure: ApiFailure.unreachable,
+      );
     } on FormatException {
-      throw ApiException('控制器返回了无效数据，请确认地址不是 LuCI 管理页面');
+      throw ApiException(
+        '控制器返回了无效数据，请确认地址不是 LuCI 管理页面',
+        failure: ApiFailure.response,
+      );
     }
   }
 

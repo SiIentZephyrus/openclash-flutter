@@ -64,6 +64,33 @@ class LogEntry {
   String get line => '$timestamp [${level.toUpperCase()}] $message';
 }
 
+enum ProviderKind {
+  proxies('proxies', '节点订阅', '节点'),
+  rules('rules', '规则集', '规则');
+
+  const ProviderKind(this.path, this.label, this.unit);
+  final String path;
+  final String label;
+  final String unit;
+}
+
+class ProviderSummary {
+  ProviderSummary(this.name, this.kind, Map<String, dynamic> json)
+    : count = kind == ProviderKind.proxies
+          ? (json['proxies'] as List?)?.length
+          : (json['ruleCount'] as num?)?.toInt(),
+      updatedAt = DateTime.tryParse('${json['updatedAt'] ?? ''}')?.toLocal(),
+      canUpdate =
+          json['vehicleType']?.toString().toLowerCase() != 'compatible' &&
+          json['vehicleType']?.toString().toLowerCase() != 'inline';
+
+  final String name;
+  final ProviderKind kind;
+  final int? count;
+  final DateTime? updatedAt;
+  final bool canUpdate;
+}
+
 String formatBytes(num bytes, {bool rate = false}) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   var value = bytes.toDouble();

@@ -10,6 +10,8 @@ class ConnectionHistory {
   List<Map<String, dynamic>> get connections =>
       _records.values.map((record) => record.data).toList();
 
+  Duration? endedAt(String id) => _records[id]?.endedAt;
+
   void update(List<Map<String, dynamic>> connections, {required Duration now}) {
     prune(now);
     final active = <String>{};

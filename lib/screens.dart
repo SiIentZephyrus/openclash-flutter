@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'clash_api.dart';
 import 'dashboard_controller.dart';
-import 'main.dart';
+import 'app_theme.dart';
 import 'models.dart';
 import 'ui_components.dart';
 import 'proxies_page.dart';
 import 'app_notice.dart';
+import 'providers_page.dart';
+import 'delay_settings.dart';
 
 class DashboardShell extends StatefulWidget {
   const DashboardShell({super.key, required this.controller});
@@ -58,16 +61,16 @@ class _DashboardShellState extends State<DashboardShell>
     builder: (context, _) {
       final c = widget.controller;
       if (!c.initialized) {
-        return const Scaffold(
+        return Scaffold(
           body: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
                 Text(
                   '正在读取控制器配置…',
-                  style: TextStyle(color: muted, fontSize: 12),
+                  style: TextStyle(color: context.muted, fontSize: 12),
                 ),
               ],
             ),
@@ -124,12 +127,12 @@ class _DashboardShellState extends State<DashboardShell>
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: accent,
+                  color: context.accent,
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.bolt_rounded,
-                  color: Colors.white,
+                  color: context.colors.onPrimary,
                   size: 25,
                 ),
               ),
@@ -161,7 +164,7 @@ class _DashboardShellState extends State<DashboardShell>
                       : c.connected
                       ? '已连接'
                       : '未连接',
-                  color: c.connected ? accent : muted,
+                  color: c.connected ? context.accent : context.muted,
                   dot: true,
                 ),
               ),
@@ -177,7 +180,7 @@ class _DashboardShellState extends State<DashboardShell>
                   selectedIndex: page,
                   onDestinationSelected: (value) =>
                       setState(() => page = value),
-                  backgroundColor: Colors.white,
+                  backgroundColor: context.surface,
                   labelType: NavigationRailLabelType.all,
                   groupAlignment: -.7,
                   destinations: List.generate(
@@ -205,8 +208,8 @@ class _DashboardShellState extends State<DashboardShell>
         bottomNavigationBar: wide
             ? null
             : Container(
-                decoration: const BoxDecoration(
-                  border: Border(top: BorderSide(color: stroke)),
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: context.stroke)),
                 ),
                 child: NavigationBar(
                   selectedIndex: page,
@@ -252,9 +255,9 @@ class OverviewPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 7),
-        const Text(
+        Text(
           '保持连接，让每一次访问都更顺畅',
-          style: TextStyle(color: muted, fontSize: 12),
+          style: TextStyle(color: context.muted, fontSize: 12),
         ),
         const SizedBox(height: 22),
         Container(
@@ -370,7 +373,7 @@ class OverviewPage extends StatelessWidget {
                 title: '下载速度',
                 value: formatBytes(c.down, rate: true),
                 icon: Icons.south_rounded,
-                color: accent,
+                color: context.accent,
                 values: c.downloadHistory,
                 width: (box.maxWidth - 12) / 2,
               ),
@@ -406,14 +409,17 @@ class OverviewPage extends StatelessWidget {
                 large: true,
               ),
               const SizedBox(height: 10),
-              const Row(
+              Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     '过去 40 次采样',
-                    style: TextStyle(fontSize: 9, color: muted),
+                    style: TextStyle(fontSize: 9, color: context.muted),
                   ),
-                  Text('现在', style: TextStyle(fontSize: 9, color: muted)),
+                  Text(
+                    '现在',
+                    style: TextStyle(fontSize: 9, color: context.muted),
+                  ),
                 ],
               ),
               const SizedBox(height: 18),
@@ -463,7 +469,7 @@ class OverviewPage extends StatelessWidget {
                         const SizedBox(height: 5),
                         Text(
                           '${group.name} · ${c.proxies[group.now]?.type ?? 'Proxy'}',
-                          style: const TextStyle(color: muted, fontSize: 10),
+                          style: TextStyle(color: context.muted, fontSize: 10),
                         ),
                       ],
                     ),
@@ -478,7 +484,7 @@ class OverviewPage extends StatelessWidget {
                         : '$selectedDelay ms',
                   ),
                   const SizedBox(width: 6),
-                  const Icon(Icons.chevron_right_rounded, color: muted),
+                  Icon(Icons.chevron_right_rounded, color: context.muted),
                 ],
               ),
             ),
@@ -495,11 +501,11 @@ class OverviewPage extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.memory_rounded, size: 13, color: muted),
+            Icon(Icons.memory_rounded, size: 13, color: context.muted),
             const SizedBox(width: 5),
             Text(
               '内存 ${formatBytes(c.memory)}  ·  ${c.nodeCount} 个节点',
-              style: const TextStyle(fontSize: 10, color: muted),
+              style: TextStyle(fontSize: 10, color: context.muted),
             ),
           ],
         ),
@@ -534,7 +540,7 @@ class _Metric extends StatelessWidget {
             children: [
               Icon(icon, size: 15, color: color),
               const SizedBox(width: 6),
-              Text(title, style: const TextStyle(color: muted, fontSize: 11)),
+              Text(title, style: TextStyle(color: context.muted, fontSize: 11)),
             ],
           ),
           const SizedBox(height: 12),
@@ -563,7 +569,7 @@ class _SmallStat extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(label, style: const TextStyle(color: muted, fontSize: 10)),
+      Text(label, style: TextStyle(color: context.muted, fontSize: 10)),
       const SizedBox(height: 6),
       Text(
         value,
@@ -581,12 +587,38 @@ class LogsPage extends StatefulWidget {
 }
 
 class _LogsPageState extends State<LogsPage> {
+  static const logExport = MethodChannel('openclash/log_export');
   String query = '', level = 'all';
   bool paused = false, follow = true;
   bool pausedForSearch = false;
+  bool exporting = false;
   List<LogEntry> frozen = [];
   final search = TextEditingController();
   final scroll = ScrollController();
+
+  Future<void> exportLogs(String action, List<LogEntry> entries) async {
+    if (entries.isEmpty || exporting) return;
+    setState(() => exporting = true);
+    final text = '${entries.map((entry) => entry.line).join('\n')}\n';
+    try {
+      await runAction(context, () async {
+        bool? done;
+        try {
+          done = await logExport.invokeMethod<bool>(action, {'text': text});
+        } on PlatformException catch (error) {
+          throw ApiException(error.message ?? '日志导出失败');
+        }
+        if (action == 'save' && done == true && mounted) {
+          showAppNotice(
+            context,
+            const AppNotice(title: '日志已保存', tone: NoticeTone.success),
+          );
+        }
+      });
+    } finally {
+      if (mounted) setState(() => exporting = false);
+    }
+  }
 
   void updateQuery(String value) => setState(() {
     final wasSearching = query.trim().isNotEmpty;
@@ -651,15 +683,26 @@ class _LogsPageState extends State<LogsPage> {
                     : widget.controller.liveStreams.contains('/logs')
                     ? '实时推送'
                     : '等待连接',
-                color: paused ? muted : accent,
+                color: paused ? context.muted : context.accent,
                 dot: true,
               ),
+              if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+                PopupMenuButton<String>(
+                  tooltip: '导出筛选日志',
+                  enabled: entries.isNotEmpty && !exporting,
+                  icon: const Icon(Icons.ios_share_rounded, size: 20),
+                  onSelected: (action) => exportLogs(action, filtered),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'save', child: Text('保存为文本文件')),
+                    PopupMenuItem(value: 'share', child: Text('分享日志文件')),
+                  ],
+                ),
             ],
           ),
           const SizedBox(height: 7),
-          const Text(
+          Text(
             '每一次连接，都有迹可循',
-            style: TextStyle(color: muted, fontSize: 12),
+            style: TextStyle(color: context.muted, fontSize: 12),
           ),
           const SizedBox(height: 18),
           TextField(
@@ -668,10 +711,10 @@ class _LogsPageState extends State<LogsPage> {
             onChanged: updateQuery,
             decoration: InputDecoration(
               hintText: '搜索域名、IP 或日志内容',
-              prefixIcon: const Icon(
+              prefixIcon: Icon(
                 Icons.search_rounded,
                 size: 20,
-                color: muted,
+                color: context.muted,
               ),
               suffixIcon: query.isEmpty
                   ? null
@@ -701,12 +744,12 @@ class _LogsPageState extends State<LogsPage> {
                         selected: level == l,
                         onSelected: (_) => setState(() => level = l),
                         showCheckmark: false,
-                        selectedColor: const Color(0xFFDDF0E8),
-                        backgroundColor: Colors.white,
+                        selectedColor: context.selectedSurface,
+                        backgroundColor: context.surface,
                         side: BorderSide(
                           color: level == l
-                              ? accent.withValues(alpha: .3)
-                              : stroke,
+                              ? context.accent.withValues(alpha: .3)
+                              : context.stroke,
                         ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(9),
@@ -721,7 +764,7 @@ class _LogsPageState extends State<LogsPage> {
             children: [
               Text(
                 '${entries.length} 条记录',
-                style: const TextStyle(fontSize: 10, color: muted),
+                style: TextStyle(fontSize: 10, color: context.muted),
               ),
               const Spacer(),
               if (paused)
@@ -730,10 +773,10 @@ class _LogsPageState extends State<LogsPage> {
                   onPressed: () => setState(() {
                     frozen = List.of(widget.controller.logs);
                   }),
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.refresh_rounded,
                     size: 19,
-                    color: accent,
+                    color: context.accent,
                   ),
                 ),
               IconButton(
@@ -747,7 +790,7 @@ class _LogsPageState extends State<LogsPage> {
                 icon: Icon(
                   paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
                   size: 19,
-                  color: accent,
+                  color: context.accent,
                 ),
               ),
               IconButton(
@@ -757,10 +800,10 @@ class _LogsPageState extends State<LogsPage> {
                     ClipboardData(text: entries.map((e) => e.line).join('\n')),
                   );
                 }, success: '日志已复制'),
-                icon: const Icon(
+                icon: Icon(
                   Icons.copy_all_outlined,
                   size: 18,
-                  color: muted,
+                  color: context.muted,
                 ),
               ),
               IconButton(
@@ -769,10 +812,10 @@ class _LogsPageState extends State<LogsPage> {
                   widget.controller.clearLogs();
                   setState(() => frozen.clear());
                 },
-                icon: const Icon(
+                icon: Icon(
                   Icons.delete_outline_rounded,
                   size: 19,
-                  color: muted,
+                  color: context.muted,
                 ),
               ),
             ],
@@ -852,15 +895,18 @@ class _LogsPageState extends State<LogsPage> {
           ),
           Row(
             children: [
-              const Icon(Icons.circle, size: 5, color: accent),
+              Icon(Icons.circle, size: 5, color: context.accent),
               const SizedBox(width: 6),
-              const Expanded(
+              Expanded(
                 child: Text(
                   '最多保留 1,500 条日志',
-                  style: TextStyle(fontSize: 9, color: muted),
+                  style: TextStyle(fontSize: 9, color: context.muted),
                 ),
               ),
-              const Text('跟随最新', style: TextStyle(fontSize: 10, color: muted)),
+              Text(
+                '跟随最新',
+                style: TextStyle(fontSize: 10, color: context.muted),
+              ),
               Transform.scale(
                 scale: .7,
                 child: Switch(
@@ -889,6 +935,172 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
   bool paused = false;
   List<Map<String, dynamic>> frozen = [];
   final search = TextEditingController();
+  String? sourceDevice;
+  String? policyGroup;
+  bool closingAll = false;
+
+  String deviceOf(Map<String, dynamic> item) =>
+      '${(item['metadata'] as Map?)?['sourceIP'] ?? ''}';
+
+  Iterable<String> chainOf(Map<String, dynamic> item) =>
+      (item['chains'] as List? ?? const []).whereType<String>();
+
+  Future<void> showFilters() async {
+    final c = widget.controller;
+    final items = paused ? frozen : source;
+    final devices = {
+      ?sourceDevice,
+      ...items.map(deviceOf).where((device) => device.isNotEmpty),
+    }.toList()..sort();
+    final groups = {
+      ?policyGroup,
+      for (final item in items)
+        ...chainOf(item).where((name) => c.proxies[name]?.isGroup == true),
+    }.toList()..sort();
+    var device = sourceDevice;
+    var group = policyGroup;
+    final result = await showDialog<(String?, String?)>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('筛选连接'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                isExpanded: true,
+                initialValue: device ?? '',
+                decoration: const InputDecoration(labelText: '来源设备'),
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('全部设备')),
+                  for (final name in devices)
+                    DropdownMenuItem(
+                      value: name,
+                      child: Text(name, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: (value) => device = value == '' ? null : value,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                isExpanded: true,
+                initialValue: group ?? '',
+                decoration: const InputDecoration(labelText: '策略组'),
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('全部策略组')),
+                  for (final name in groups)
+                    DropdownMenuItem(
+                      value: name,
+                      child: Text(name, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: (value) => group = value == '' ? null : value,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, (null, null)),
+            child: const Text('清除筛选'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, (device, group)),
+            child: const Text('应用'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || result == null) return;
+    setState(() {
+      sourceDevice = result.$1;
+      policyGroup = result.$2;
+    });
+  }
+
+  Future<void> confirmCloseAll() async {
+    final c = widget.controller;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('关闭全部连接？'),
+        content: const Text('当前控制器上的所有活跃连接都将断开，包括筛选结果之外的连接。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: const Text('关闭全部'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true || closingAll) return;
+    setState(() => closingAll = true);
+    final closingIds = c.connections.map((item) => item['id']).toSet();
+    await runAction(context, () async {
+      await c.closeAllConnections();
+      if (mounted) {
+        setState(
+          () => frozen.removeWhere((item) => closingIds.contains(item['id'])),
+        );
+      }
+    }, success: '已关闭全部连接');
+    if (mounted) setState(() => closingAll = false);
+  }
+
+  void showConnection(Map<String, dynamic> item, bool active) {
+    final meta = item['metadata'] as Map? ?? const {};
+    String address(Object? host, Object? port) {
+      final value = host?.toString() ?? '';
+      if (value.isEmpty) return '—';
+      if (port == null || '$port'.isEmpty) return value;
+      return '${value.contains(':') ? '[$value]' : value}:$port';
+    }
+
+    final host = meta['host']?.toString() ?? '';
+    final ip = meta['destinationIP']?.toString() ?? '';
+    final duration = widget.controller.connectionDuration(item, active: active);
+    final details = <String, String>{
+      '状态': active ? '活跃' : '已结束',
+      '来源地址': address(meta['sourceIP'], meta['sourcePort']),
+      '目标地址': address(host.isEmpty ? ip : host, meta['destinationPort']),
+      if (host.isNotEmpty && ip.isNotEmpty && host != ip) '目标 IP': ip,
+      '持续时间': duration == null ? '—' : '${duration.inSeconds} 秒',
+      '命中规则': [
+        item['rule'],
+        item['rulePayload'],
+      ].where((value) => value != null && '$value'.isNotEmpty).join(' · '),
+      '代理链': chainOf(item).toList().reversed.join(' → '),
+      '流量':
+          '↓ ${formatBytes(item['download'] as num? ?? 0)}   ↑ ${formatBytes(item['upload'] as num? ?? 0)}',
+    };
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          children: [
+            Text('连接详情', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            for (final entry in details.entries)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(entry.key),
+                subtitle: SelectableText(
+                  entry.value.isEmpty ? '—' : entry.value,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   List<Map<String, dynamic>> get source => query.trim().isEmpty
       ? widget.controller.connections
@@ -918,9 +1130,12 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
     final liveConnectionIds = c.connections.map((item) => item['id']).toSet();
     final connections = (paused ? frozen : source)
         .where(
-          (item) => item.toString().toLowerCase().contains(
-            query.trim().toLowerCase(),
-          ),
+          (item) =>
+              (sourceDevice == null || deviceOf(item) == sourceDevice) &&
+              (policyGroup == null || chainOf(item).contains(policyGroup)) &&
+              item.toString().toLowerCase().contains(
+                query.trim().toLowerCase(),
+              ),
         )
         .toList();
     final rules = c.rules
@@ -946,9 +1161,9 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                 ),
               ),
               const SizedBox(height: 7),
-              const Text(
+              Text(
                 '查看连接去向与规则匹配',
-                style: TextStyle(color: muted, fontSize: 12),
+                style: TextStyle(color: context.muted, fontSize: 12),
               ),
               const SizedBox(height: 18),
               Row(
@@ -979,6 +1194,15 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                     },
                     showCheckmark: false,
                   ),
+                  if (showRules) ...[
+                    const Spacer(),
+                    IconButton(
+                      tooltip: '管理规则集',
+                      onPressed: () =>
+                          ProvidersPage.open(context, c, ProviderKind.rules),
+                      icon: const Icon(Icons.inventory_2_outlined),
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 14),
@@ -988,10 +1212,10 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                 onChanged: updateQuery,
                 decoration: InputDecoration(
                   hintText: showRules ? '搜索规则、目标策略' : '搜索域名、IP、代理链',
-                  prefixIcon: const Icon(
+                  prefixIcon: Icon(
                     Icons.search_rounded,
                     size: 20,
-                    color: muted,
+                    color: context.muted,
                   ),
                   suffixIcon: query.isEmpty
                       ? null
@@ -1015,19 +1239,37 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                             : query.trim().isNotEmpty
                             ? '实时搜索 · 已结束保留 5 分钟'
                             : '实时刷新 · 搜索含最近 5 分钟连接',
-                        style: const TextStyle(fontSize: 10, color: muted),
+                        style: TextStyle(fontSize: 10, color: context.muted),
                       ),
                     ),
                     if (paused)
                       IconButton(
                         tooltip: '刷新连接快照',
                         onPressed: () => setState(() => frozen = snapshot()),
-                        icon: const Icon(
+                        icon: Icon(
                           Icons.refresh_rounded,
                           size: 19,
-                          color: accent,
+                          color: context.accent,
                         ),
                       ),
+                    IconButton(
+                      tooltip: '筛选连接',
+                      onPressed: showFilters,
+                      isSelected: sourceDevice != null || policyGroup != null,
+                      selectedIcon: const Icon(
+                        Icons.filter_alt_rounded,
+                        size: 19,
+                      ),
+                      icon: const Icon(Icons.filter_alt_outlined, size: 19),
+                    ),
+                    IconButton(
+                      tooltip: '关闭全部连接',
+                      onPressed:
+                          !c.connected || c.connections.isEmpty || closingAll
+                          ? null
+                          : confirmCloseAll,
+                      icon: const Icon(Icons.link_off_rounded, size: 19),
+                    ),
                     IconButton(
                       tooltip: paused ? '继续刷新连接' : '暂停刷新连接',
                       onPressed: () => setState(() {
@@ -1037,7 +1279,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                       icon: Icon(
                         paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
                         size: 19,
-                        color: accent,
+                        color: context.accent,
                       ),
                     ),
                   ],
@@ -1079,7 +1321,10 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                           const Spacer(),
                           Text(
                             '${rule['proxy']}',
-                            style: const TextStyle(color: accent, fontSize: 11),
+                            style: TextStyle(
+                              color: context.accent,
+                              fontSize: 11,
+                            ),
                           ),
                         ],
                       ),
@@ -1101,80 +1346,89 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
               return Panel(
                 key: ValueKey('connection-${item['id']}'),
                 padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.language_rounded,
-                          size: 18,
-                          color: accent,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            host?.isNotEmpty == true
-                                ? host!
-                                : '${meta['destinationIP'] ?? 'Unknown'}',
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
+                child: InkWell(
+                  onTap: () => showConnection(
+                    item,
+                    liveConnectionIds.contains(item['id']),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.language_rounded,
+                            size: 18,
+                            color: context.accent,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              host?.isNotEmpty == true
+                                  ? host!
+                                  : '${meta['destinationIP'] ?? 'Unknown'}',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
-                        ),
-                        if (!liveConnectionIds.contains(item['id']))
-                          const Tag('已结束', color: muted),
-                        IconButton(
-                          tooltip: '关闭连接',
-                          visualDensity: VisualDensity.compact,
-                          onPressed: !liveConnectionIds.contains(item['id'])
-                              ? null
-                              : () => runAction(context, () async {
-                                  await c.closeConnection('${item['id']}');
-                                  if (mounted) {
-                                    setState(
-                                      () => frozen.removeWhere(
-                                        (entry) => entry['id'] == item['id'],
-                                      ),
-                                    );
-                                  }
-                                }),
-                          icon: const Icon(
-                            Icons.close_rounded,
-                            size: 17,
-                            color: muted,
+                          if (!liveConnectionIds.contains(item['id']))
+                            Tag('已结束', color: context.muted),
+                          IconButton(
+                            tooltip: '关闭连接',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: !liveConnectionIds.contains(item['id'])
+                                ? null
+                                : () => runAction(context, () async {
+                                    await c.closeConnection('${item['id']}');
+                                    if (mounted) {
+                                      setState(
+                                        () => frozen.removeWhere(
+                                          (entry) => entry['id'] == item['id'],
+                                        ),
+                                      );
+                                    }
+                                  }),
+                            icon: Icon(
+                              Icons.close_rounded,
+                              size: 17,
+                              color: context.muted,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${meta['sourceIP'] ?? '—'} → :${meta['destinationPort'] ?? '—'} · ${meta['network'] ?? 'TCP'}',
-                      style: const TextStyle(color: muted, fontSize: 10),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      (item['chains'] as List? ?? []).reversed.join(' → '),
-                      style: const TextStyle(color: accent, fontSize: 10),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${item['rule'] ?? ''}',
-                            style: const TextStyle(fontSize: 9, color: muted),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${meta['sourceIP'] ?? '—'} → :${meta['destinationPort'] ?? '—'} · ${meta['network'] ?? 'TCP'}',
+                        style: TextStyle(color: context.muted, fontSize: 10),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        (item['chains'] as List? ?? []).reversed.join(' → '),
+                        style: TextStyle(color: context.accent, fontSize: 10),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${item['rule'] ?? ''}',
+                              style: TextStyle(
+                                fontSize: 9,
+                                color: context.muted,
+                              ),
+                            ),
                           ),
-                        ),
-                        Text(
-                          '↓ ${formatBytes(item['download'] as num? ?? 0)}   ↑ ${formatBytes(item['upload'] as num? ?? 0)}',
-                          style: const TextStyle(fontSize: 9, color: muted),
-                        ),
-                      ],
-                    ),
-                  ],
+                          Text(
+                            '↓ ${formatBytes(item['download'] as num? ?? 0)}   ↑ ${formatBytes(item['upload'] as num? ?? 0)}',
+                            style: TextStyle(fontSize: 9, color: context.muted),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               );
             },
@@ -1271,6 +1525,82 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => editing = true);
   }
 
+  Future<void> editDelaySettings() async {
+    final c = widget.controller;
+    final key = GlobalKey<FormState>();
+    var url = c.delaySettings.url;
+    var timeout = c.delaySettings.timeoutMs;
+    final settings = await showDialog<DelaySettings>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('测速设置'),
+        content: Form(
+          key: key,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  initialValue: url,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  decoration: const InputDecoration(labelText: '默认测速地址'),
+                  validator: (value) =>
+                      DelaySettings.supportsUrl(value?.trim() ?? '')
+                      ? null
+                      : '请输入有效的 HTTP 或 HTTPS 地址',
+                  onSaved: (value) => url = value!.trim(),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: '$timeout',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(labelText: '单节点超时（毫秒）'),
+                  validator: (value) =>
+                      DelaySettings.supportsTimeout(int.tryParse(value ?? ''))
+                      ? null
+                      : '请输入 250 到 30000 之间的整数',
+                  onSaved: (value) => timeout = int.parse(value!),
+                ),
+                const SizedBox(height: 12),
+                const Text('订阅集合已配置的测速地址会优先使用。'),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, const DelaySettings()),
+            child: const Text('恢复默认'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final form = key.currentState!;
+              if (!form.validate()) return;
+              form.save();
+              Navigator.pop(
+                dialog,
+                DelaySettings(url: url, timeoutMs: timeout),
+              );
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || settings == null) return;
+    await runAction(
+      context,
+      () => c.saveDelaySettings(settings),
+      success: '测速设置已保存',
+    );
+  }
+
   Future<void> manageControllers() async {
     final c = widget.controller;
     final action = await showModalBottomSheet<(String, String)>(
@@ -1297,7 +1627,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         active
                             ? Icons.check_circle_outline
                             : Icons.router_outlined,
-                        color: accent,
+                        color: context.accent,
                       ),
                       title: Text(profile.label),
                       subtitle: profile.name.isEmpty && !active
@@ -1396,17 +1726,25 @@ class _SettingsPageState extends State<SettingsPage> {
         const SizedBox(height: 7),
         Text(
           widget.requiredSetup ? '首次使用请先配置，连接并保存后进入' : '保存常用控制器并快速切换',
-          style: TextStyle(color: muted, fontSize: 12),
+          style: TextStyle(color: context.muted, fontSize: 12),
         ),
         if (!widget.requiredSetup) ...[
           const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: busy || editing ? null : manageControllers,
-              icon: const Icon(Icons.router_outlined, size: 18),
-              label: const Text('管理控制器'),
-            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              OutlinedButton.icon(
+                onPressed: busy || editing ? null : manageControllers,
+                icon: const Icon(Icons.router_outlined, size: 18),
+                label: const Text('管理控制器'),
+              ),
+              OutlinedButton.icon(
+                onPressed: editDelaySettings,
+                icon: const Icon(Icons.speed_rounded, size: 18),
+                label: const Text('测速设置'),
+              ),
+            ],
           ),
         ],
         const SizedBox(height: 22),
@@ -1421,9 +1759,9 @@ class _SettingsPageState extends State<SettingsPage> {
                       ? '控制器'
                       : c.controllerName,
                   subtitle: '连接 OpenClash / Mihomo 的外部控制接口',
-                  trailing: const Icon(
+                  trailing: Icon(
                     Icons.router_outlined,
-                    color: accent,
+                    color: context.accent,
                     size: 22,
                   ),
                 ),
@@ -1476,7 +1814,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             ? Icons.visibility_off_outlined
                             : Icons.visibility_outlined,
                         size: 18,
-                        color: muted,
+                        color: context.muted,
                       ),
                     ),
                   ),
@@ -1492,9 +1830,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const SizedBox(height: 10),
                 ],
-                const Text(
+                Text(
                   '地址和密钥会加密保存在本机，下次启动自动使用。',
-                  style: TextStyle(fontSize: 10, color: muted),
+                  style: TextStyle(fontSize: 10, color: context.muted),
                 ),
                 const SizedBox(height: 22),
                 SizedBox(
@@ -1562,25 +1900,24 @@ class _SettingsPageState extends State<SettingsPage> {
                       Flexible(
                         child: Text(
                           c.version,
-                          style: const TextStyle(fontSize: 10, color: muted),
+                          style: TextStyle(fontSize: 10, color: context.muted),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    '实时通道 ${c.liveStreams.length}/4${c.liveStreams.length < 4 ? ' · 中断的通道会自动重连' : ' · 正常'}',
-                    style: const TextStyle(fontSize: 10, color: muted),
-                  ),
+                ],
+                if (!widget.requiredSetup) ...[
+                  const SizedBox(height: 16),
+                  _ControllerDiagnostics(controller: c),
                 ],
               ],
             ),
           ),
         ),
         const SizedBox(height: 18),
-        const Panel(
-          color: Color(0xFFEDF4F1),
+        Panel(
+          color: context.selectedSurface,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1589,40 +1926,91 @@ class _SettingsPageState extends State<SettingsPage> {
                   Icon(
                     Icons.lightbulb_outline_rounded,
                     size: 18,
-                    color: accent,
+                    color: context.accent,
                   ),
-                  SizedBox(width: 8),
-                  Text(
+                  const SizedBox(width: 8),
+                  const Text(
                     '如何连接 OpenClash？',
                     style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
                   ),
                 ],
               ),
-              SizedBox(height: 13),
+              const SizedBox(height: 13),
               Text(
                 '1. 手机与路由器连接到同一局域网。\n2. 在 OpenClash 中查看外部控制器端口和密钥。\n3. 填写路由器 IP、控制器端口及 API Secret。',
                 style: TextStyle(
                   fontSize: 11,
-                  color: Color(0xFF607E75),
+                  color: context.colors.onPrimaryContainer,
                   height: 2,
                 ),
               ),
-              SizedBox(height: 9),
+              const SizedBox(height: 9),
               Text(
                 '这里填写控制器地址，而非 LuCI 管理页面地址。',
-                style: TextStyle(fontSize: 10, color: muted),
+                style: TextStyle(fontSize: 10, color: context.muted),
               ),
             ],
           ),
         ),
         const SizedBox(height: 25),
-        const Center(
+        Center(
           child: Text(
-            'OpenClash Mobile  1.0.9\nInspired by MetaCubeXD · Built with Flutter',
+            'OpenClash Mobile  1.1.0\nInspired by MetaCubeXD · Built with Flutter',
             textAlign: TextAlign.center,
-            style: TextStyle(color: muted, fontSize: 10, height: 2),
+            style: TextStyle(color: context.muted, fontSize: 10, height: 2),
           ),
         ),
+      ],
+    );
+  }
+}
+
+class _ControllerDiagnostics extends StatelessWidget {
+  const _ControllerDiagnostics({required this.controller});
+  final DashboardController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller;
+    final status = switch (c.connectionFailure) {
+      ApiFailure.authentication => '鉴权失败',
+      ApiFailure.unreachable => '控制器地址不可达',
+      ApiFailure.response => '控制接口异常',
+      null =>
+        c.connecting
+            ? '正在连接'
+            : c.connected
+            ? '控制接口可用'
+            : '尚未连接',
+    };
+    const channels = {
+      '/traffic': '流量',
+      '/memory': '内存',
+      '/connections': '连接',
+      '/logs': '日志',
+    };
+    final interrupted = channels.keys
+        .where(c.interruptedStreams.contains)
+        .map((path) => channels[path]!)
+        .join('、');
+    final last = c.lastConnected;
+    final l10n = MaterialLocalizations.of(context);
+    final lastTime = last == null
+        ? '暂无'
+        : '${l10n.formatShortDate(last)} ${l10n.formatTimeOfDay(TimeOfDay.fromDateTime(last), alwaysUse24HourFormat: true)}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('连接诊断', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        Text(status),
+        if (c.connected)
+          Text(
+            c.backgrounded
+                ? '实时通道已暂停'
+                : '实时通道 ${c.liveStreams.length}/${channels.length}${interrupted.isEmpty ? '' : ' · $interrupted通道中断，正在重试'}',
+          ),
+        Text('本次启动最近连接成功时间 $lastTime'),
       ],
     );
   }
